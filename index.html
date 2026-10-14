@@ -131,6 +131,11 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
     <div class="main">
       <div class="titlebar"><h1>Championship Manager 01/02</h1></div>
       <div class="panel">
+        <div class="section" id="crash-card" hidden>
+          <h2>Last game closed unexpectedly</h2>
+          <p class="fine" id="crash-text"></p>
+          <div class="row"><span class="fine">Screenshot this for Claude, then load your latest save.</span><button class="btn" type="button" id="crash-dismiss">Dismiss</button></div>
+        </div>
         <div class="section" id="install-hint" hidden>
           <h2>Add it to your Home Screen first</h2>
           <p class="fine">Tap the Share button, then Add to Home Screen, and open it from the new icon. The home screen app keeps its own copy of the game and your saves, separate from Safari, so do the first download there.</p>
@@ -343,12 +348,49 @@ async function refreshStatus() {
   else if (have === 0) $("status-line").textContent = "First kick off downloads " + fmtMB(TOTAL) + ". After that it plays offline.";
   else $("status-line").textContent = fmtMB(missing) + " still to download. After that it plays offline.";
 }
+/* ===== Session diagnostics: survive a crash so the next launch can report it ===== */
+const DIAG_KEY = "cm-last-session";
+const diag = { engine: "", started: 0, at: 0, mips: 0, peakMips: 0, wasmMB: 0, blocks: 0, jitMB: 0, groups: 0, oom: false, shown: false, phase: "" };
+function diagWrite() { diag.at = Date.now(); ls.set(DIAG_KEY, JSON.stringify(diag)); }
+function diagSample() {
+  try { if (typeof HEAPU8 !== "undefined") diag.wasmMB = Math.round(HEAPU8.length / 1048576); } catch (e) {}
+  try { if (typeof Module !== "undefined") { diag.groups = Module.wasmJitRuntimeGroups ? Module.wasmJitRuntimeGroups.size : diag.groups; diag.oom = diag.oom || Module.wasmJitOomGeneration !== undefined; } } catch (e) {}
+  diag.mips = lastMips; diag.peakMips = Math.max(diag.peakMips, lastMips); diag.shown = gameShown;
+  diagWrite();
+}
+// The JIT reports its totals straight to the console.
+for (const level of ["log", "warn"]) {
+  const orig = console[level].bind(console);
+  console[level] = function (...args) {
+    const t = typeof args[0] === "string" ? args[0] : "";
+    if (t.startsWith("[WASM JIT")) {
+      const j = /compiledBlocks=(\d+).*?mergedBytes=(\d+)/.exec(t);
+      if (j) { diag.blocks = +j[1]; diag.jitMB = Math.round(+j[2] / 1048576); }
+      if (/out of memory|releasing JIT code/i.test(t)) diag.oom = true;
+    }
+    return orig(...args);
+  };
+}
+document.addEventListener("visibilitychange", () => { if (started) { diag.phase = document.hidden ? "in background" : "playing"; diagSample(); } });
+(function showLastCrash() {
+  let last = null; try { last = JSON.parse(ls.get(DIAG_KEY, "null")); } catch (e) {}
+  if (!last || !last.started || last.clean) return;
+  const mins = Math.max(1, Math.round((last.at - last.started) / 60000));
+  $("crash-text").textContent = "After " + mins + " min on the " + (last.engine === "st" ? "Standard" : "Fast") + " engine, " + last.phase +
+    ". Memory " + last.wasmMB + " MB · compiled code " + last.jitMB + " MB in " + last.blocks + " blocks" + (last.groups ? " (" + last.groups + " modules)" : "") +
+    (last.oom ? " · compiled code ran out of room" : "") + " · " + last.mips + " MIPS at the end. Logged " + new Date(last.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) + ".";
+  $("crash-card").hidden = false;
+  $("crash-dismiss").onclick = () => { $("crash-card").hidden = true; last.clean = true; ls.set(DIAG_KEY, JSON.stringify(last)); };
+})();
+
 refreshStatus();
 
 /* ===== Boot ===== */
 let started = false, bootStart = 0, bootTimer = 0, gameShown = false;
 $("kick").onclick = async () => {
   if (started) return; started = true;
+  Object.assign(diag, { engine, started: Date.now(), phase: "loading files", peakMips: 0, blocks: 0, jitMB: 0, groups: 0, oom: false }); diagWrite();
+  $("crash-card").hidden = true;
   $("kick").disabled = true; $("kick").textContent = "Loading…";
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
   let done = 0;
@@ -436,6 +478,9 @@ function startEngine() {
       text = String(text);
       const m = /\[MIPS\].*?avg=(\d+)/.exec(text);
       if (m) { lastMips = +m[1]; $("mips").innerHTML = lastMips + "<br>MIPS"; return; }
+      const j = /compiledBlocks=(\d+).*?mergedBytes=(\d+)/.exec(text);
+      if (j) { diag.blocks = +j[1]; diag.jitMB = Math.round(+j[2] / 1048576); return; }
+      if (/out of memory|releasing JIT code/i.test(text)) { diag.oom = true; diagSample(); }
       if (!gameShown && /Showing Window/.test(text)) onWindowShown();
     };
     Module.print = function () { watch(Array.prototype.join.call(arguments, " ")); };
@@ -444,7 +489,13 @@ function startEngine() {
     // Copy queued saves into the game folder after the browser storage is
     // mounted but before Windows starts, so the game sees them in its list.
     const origStart = window.startEmulator;
-    window.startEmulator = function () { installPendingSaves().finally(() => origStart()); };
+    window.startEmulator = function () {
+      // The emulator now holds its own copies of the zips, so drop ours.
+      for (const k of Object.keys(ready)) delete ready[k];
+      diag.phase = "starting Windows"; diagSample();
+      setInterval(diagSample, 3000);
+      installPendingSaves().finally(() => origStart());
+    };
     const eng = document.createElement("script"); eng.src = engine + "/boxedwine.js";
     eng.onerror = () => { $("boot-title").textContent = "Engine failed to load"; $("boot-text").textContent = "Reload the page and try the other engine."; };
     document.body.appendChild(eng);
@@ -455,6 +506,7 @@ let lastMips = 0;
 setInterval(() => { if (document.title !== "CM 01/02") document.title = "CM 01/02"; }, 2000);
 function gameDir() { return ROOT + GAME_DIR_REL; }
 function onWindowShown() {
+  diag.phase = "playing";
   gameShown = true;
   $("boot-title").textContent = "Windows is up";
   $("boot-text").textContent = "Championship Manager is loading its database. The red title screen comes next.";
