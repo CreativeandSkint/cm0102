@@ -98,8 +98,14 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
 #tools button svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 #tools button[aria-pressed="true"] { background: var(--yellow); color: #1b1600; }
 #tools .mips { font-family: var(--display); font-size: 11px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; line-height: 1.2; }
-@container (max-aspect-ratio: 1.38) { }
-@media (max-aspect-ratio: 1.42/1) { #tools { top: auto; transform: none; bottom: max(8px, env(safe-area-inset-bottom, 0px)); flex-direction: row; opacity: .85; } }
+#t-handle { display: none; }
+/* Screens too square for a side rail (13" iPads): the tools fold behind a small tab on the right edge. */
+@media (max-aspect-ratio: 1.42/1) {
+  #tools { right: 0; padding-right: env(safe-area-inset-right, 0px); }
+  #t-handle { display: grid; width: 22px !important; min-height: 64px !important; padding: 0 !important; border-right: 0 !important; opacity: .8; font-size: 16px !important; }
+  #tools:not(.open) > :not(#t-handle) { display: none; }
+  #tools.open #t-handle { min-height: 22px !important; width: 52px !important; }
+}
 #kbd { position: absolute; left: 0; bottom: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; font-size: 16px; border: 0; padding: 0; }
 
 #boot { position: absolute; z-index: 4; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100% - 32px)); background: rgba(5, 8, 40, .92); border: 1px solid var(--navy-2); padding: 18px 20px; display: grid; gap: 10px; }
@@ -172,6 +178,7 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
     <div class="t" id="boot-time">0:00</div>
   </div>
   <div id="tools" hidden>
+    <button type="button" id="t-handle" aria-label="Show tools" aria-expanded="false">‹</button>
     <button type="button" id="t-kbd" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="1.5"/><path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01M7 14h10"/></svg>Keys</button>
     <button type="button" id="t-rc" aria-pressed="false" title="Next tap is a right-click"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7M12 10h6"/></svg>Right</button>
     <button type="button" id="t-saves" title="Saves"><svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h7V3M8 21v-7h8v7"/></svg>Saves</button>
@@ -375,6 +382,10 @@ async function installPendingSaves() {
   installedNow = names.join(" and ");
 }
 
+/* ===== Folding tool rail ===== */
+$("t-handle").onclick = () => { const open = $("tools").classList.toggle("open"); $("t-handle").setAttribute("aria-expanded", open); $("t-handle").textContent = open ? "›" : "‹"; };
+for (const id of ["t-kbd", "t-saves", "t-fs"]) $(id).addEventListener("click", () => { if (window.matchMedia("(max-aspect-ratio: 1.42/1)").matches) { $("tools").classList.remove("open"); $("t-handle").textContent = "‹"; } });
+
 /* ===== Saves drawer: back up and import while playing ===== */
 $("t-saves").onclick = () => { $("drawer").hidden = false; $("d-status").textContent = ""; };
 $("d-close").onclick = () => { $("drawer").hidden = true; };
@@ -441,6 +452,7 @@ function startEngine() {
   document.body.appendChild(shell);
 }
 let lastMips = 0;
+setInterval(() => { if (document.title !== "CM 01/02") document.title = "CM 01/02"; }, 2000);
 function gameDir() { return ROOT + GAME_DIR_REL; }
 function onWindowShown() {
   gameShown = true;
