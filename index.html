@@ -151,16 +151,16 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
             <div class="label"><b id="engine-name">Fast</b><span id="engine-note">Compiles the game code as it runs.</span></div>
             <div class="seg" role="group" aria-label="Engine">
               <button type="button" id="eng-st" aria-pressed="false">Standard</button>
-              <button type="button" id="eng-jit" aria-pressed="true">Fast</button>
+              <button type="button" id="eng-jit" aria-pressed="false">Fast</button>
+              <button type="button" id="eng-jitr" aria-pressed="true">Recycling</button>
             </div>
           </div>
-          <div class="row">
-            <div class="label"><b>Code memory</b><span id="cap-note">How much compiled game code the Fast engine may keep. Past the limit, new code runs slower instead of crashing.</span></div>
+          <div class="row" id="cap-row">
+            <div class="label"><b>Recycle at</b><span id="cap-note">How much compiled code the Recycling engine builds up before it clears it out and starts afresh. Lower is safer, higher means fewer short pauses.</span></div>
             <div class="seg" role="group" aria-label="Code memory limit">
-              <button type="button" id="cap-400" aria-pressed="false">Low</button>
-              <button type="button" id="cap-700" aria-pressed="false">Medium</button>
-              <button type="button" id="cap-1100" aria-pressed="false">High</button>
-              <button type="button" id="cap-0" aria-pressed="false">Off</button>
+              <button type="button" id="cap-300" aria-pressed="false">300 MB</button>
+              <button type="button" id="cap-500" aria-pressed="false">500 MB</button>
+              <button type="button" id="cap-800" aria-pressed="false">800 MB</button>
             </div>
           </div>
         </div>
@@ -284,43 +284,42 @@ window.fetch = function (input, init) {
 };
 
 /* ===== Engine choice ===== */
-let engine = ls.get("cm-engine", "jit");
+const ENGINES = {
+  st: ["Standard", "Interprets every instruction. Use it only if the others won't start. Much slower when processing matches."],
+  jit: ["Fast", "The original fast engine. Keeps every bit of code it compiles, so on iPad it can run out of memory after a few in-game days."],
+  jitr: ["Recycling", "The fast engine, changed for iPad: when its compiled code passes the limit below it clears it out and rebuilds what's needed. Expect a brief slowdown when that happens."],
+};
+let engine = ls.get("cm-engine-v2", "jitr");
 function renderEngine() {
-  $("eng-st").setAttribute("aria-pressed", engine === "st");
-  $("eng-jit").setAttribute("aria-pressed", engine === "jit");
-  $("engine-name").textContent = engine === "st" ? "Standard" : "Fast";
-  $("engine-note").textContent = engine === "st"
-    ? "Interprets every instruction. Use it only if Fast won't start. Much slower when processing matches."
-    : "Compiles the game code as it runs. Roughly 30 times quicker than Standard.";
+  for (const k of Object.keys(ENGINES)) $("eng-" + k).setAttribute("aria-pressed", engine === k);
+  $("engine-name").textContent = ENGINES[engine][0];
+  $("engine-note").textContent = ENGINES[engine][1];
+  $("cap-row").hidden = engine !== "jitr";
 }
-$("eng-st").onclick = () => { engine = "st"; ls.set("cm-engine", engine); renderEngine(); };
-$("eng-jit").onclick = () => { engine = "jit"; ls.set("cm-engine", engine); renderEngine(); };
+for (const k of Object.keys(ENGINES)) $("eng-" + k).onclick = () => { engine = k; ls.set("cm-engine-v2", engine); renderEngine(); };
 
-/* ===== Compiled-code limit =====
-   The Fast engine turns game code into WebAssembly modules and keeps them.
-   CM can generate gigabytes of them over a few in-game days, and iPadOS kills
-   the page long before that. Past the limit we refuse new modules with an
-   "out of memory" error, which Boxedwine handles by running that code in its
-   interpreter instead. Live size is tracked, so freed modules give room back. */
-let capMB = +ls.get("cm-jit-cap", "0");
-function renderCap() { for (const v of [400, 700, 1100, 0]) $("cap-" + v).setAttribute("aria-pressed", capMB === v); }
-for (const v of [400, 700, 1100, 0]) $("cap-" + v).onclick = () => { capMB = v; ls.set("cm-jit-cap", String(v)); renderCap(); };
+/* ===== Compiled-code recycling =====
+   Every WebAssembly module the engine compiles passes through here, so we
+   know how much code has been built since the last clear-out. Past the limit
+   we ask the Recycling engine to flush; it does that between thread slices
+   (see cmMaybeFlushJit in the engine) and calls back when done. */
+let capMB = +ls.get("cm-jit-recycle", "500");
+function renderCap() { for (const v of [300, 500, 800]) $("cap-" + v).setAttribute("aria-pressed", capMB === v); }
+for (const v of [300, 500, 800]) $("cap-" + v).onclick = () => { capMB = v; ls.set("cm-jit-recycle", String(v)); renderCap(); };
 renderCap();
-const jitMem = { live: 0, total: 0, refused: 0 };
-function installJitCap() {
+const jitMem = { sinceFlush: 0, total: 0, flushes: 0 };
+function installJitWatch() {
   const Orig = WebAssembly.Module;
-  const reg = typeof FinalizationRegistry === "function" ? new FinalizationRegistry(n => { jitMem.live -= n; }) : null;
-  function CappedModule(bytes) {
+  function WatchedModule(bytes) {
     const n = (bytes && (bytes.byteLength || bytes.length)) || 0;
-    if (capMB && jitMem.live + n > capMB * 1048576) { jitMem.refused++; diag.capped = true; throw new RangeError("out of memory (code limit reached)"); }
     const m = new Orig(bytes);
-    jitMem.live += n; jitMem.total += n;
-    if (reg) reg.register(m, n);
+    jitMem.sinceFlush += n; jitMem.total += n;
+    if (engine === "jitr" && jitMem.sinceFlush > capMB * 1048576 && typeof Module !== "undefined" && !Module.cmJitFlushRequested) Module.cmJitFlushRequested = true;
     return m;
   }
-  CappedModule.prototype = Orig.prototype;
-  for (const k of ["exports", "imports", "customSections"]) CappedModule[k] = Orig[k];
-  WebAssembly.Module = CappedModule;
+  WatchedModule.prototype = Orig.prototype;
+  for (const k of ["exports", "imports", "customSections"]) WatchedModule[k] = Orig[k];
+  WebAssembly.Module = WatchedModule;
 }
 renderEngine();
 
@@ -391,7 +390,7 @@ function diagWrite() { diag.at = Date.now(); ls.set(DIAG_KEY, JSON.stringify(dia
 function diagSample() {
   try { if (typeof HEAPU8 !== "undefined") diag.wasmMB = Math.round(HEAPU8.length / 1048576); } catch (e) {}
   try { if (typeof Module !== "undefined") { diag.groups = Module.wasmJitRuntimeGroups ? Module.wasmJitRuntimeGroups.size : diag.groups; diag.oom = diag.oom || Module.wasmJitOomGeneration !== undefined; } } catch (e) {}
-  diag.jitLiveMB = Math.round(jitMem.live / 1048576); diag.jitTotalMB = Math.round(jitMem.total / 1048576); diag.cap = capMB;
+  diag.jitLiveMB = Math.round(jitMem.sinceFlush / 1048576); diag.jitTotalMB = Math.round(jitMem.total / 1048576); diag.cap = engine === "jitr" ? capMB : 0;
   diag.mips = lastMips; diag.peakMips = Math.max(diag.peakMips, lastMips); diag.shown = gameShown;
   diagWrite();
 }
@@ -413,9 +412,9 @@ document.addEventListener("visibilitychange", () => { if (started) { diag.phase 
   let last = null; try { last = JSON.parse(ls.get(DIAG_KEY, "null")); } catch (e) {}
   if (!last || !last.started || last.clean) return;
   const mins = Math.max(1, Math.round((last.at - last.started) / 60000));
-  $("crash-text").textContent = "After " + mins + " min on the " + (last.engine === "st" ? "Standard" : "Fast") + " engine, " + last.phase +
-    ". Memory " + last.wasmMB + " MB · compiled code kept " + (last.jitLiveMB || 0) + " MB of " + (last.jitTotalMB || 0) + " MB made" + (last.groups ? " in " + last.groups + " modules" : "") +
-    " · limit " + (last.cap ? last.cap + " MB" : "off") + (last.capped ? " (reached)" : "") +
+  $("crash-text").textContent = "After " + mins + " min on the " + ((ENGINES[last.engine] || ["Fast"])[0]) + " engine, " + last.phase +
+    ". Memory " + last.wasmMB + " MB · compiled code since last clear-out " + (last.jitLiveMB || 0) + " MB of " + (last.jitTotalMB || 0) + " MB made" + (last.groups ? " in " + last.groups + " modules" : "") +
+    " · recycle at " + (last.cap ? last.cap + " MB" : "off") + " (" + (last.flushes || 0) + " clear-outs)" +
      " · " + last.mips + " MIPS at the end. Logged " + new Date(last.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) + ".";
   $("crash-card").hidden = false;
   $("crash-dismiss").onclick = () => { $("crash-card").hidden = true; last.clean = true; ls.set(DIAG_KEY, JSON.stringify(last)); };
@@ -427,7 +426,7 @@ refreshStatus();
 let started = false, bootStart = 0, bootTimer = 0, gameShown = false;
 $("kick").onclick = async () => {
   if (started) return; started = true;
-  Object.assign(diag, { engine, started: Date.now(), phase: "loading files", peakMips: 0, blocks: 0, jitMB: 0, groups: 0, oom: false, capped: false, jitLiveMB: 0, jitTotalMB: 0, clean: false }); diagWrite();
+  Object.assign(diag, { engine, started: Date.now(), phase: "loading files", peakMips: 0, blocks: 0, jitMB: 0, groups: 0, oom: false, flushes: 0, jitLiveMB: 0, jitTotalMB: 0, clean: false }); diagWrite();
   $("crash-card").hidden = true;
   $("kick").disabled = true; $("kick").textContent = "Loading…";
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
@@ -507,7 +506,7 @@ const pendingSaves = [];
 function startEngine() {
   $("launcher").hidden = true; $("stage").classList.add("on");
   bootStart = Date.now();
-  bootTimer = setInterval(() => { const s = Math.floor((Date.now() - bootStart) / 1000); $("boot-time").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") + " · " + (engine === "st" ? "Standard" : "Fast") + " engine" + (lastMips ? " · " + lastMips + " MIPS" : ""); }, 1000);
+  bootTimer = setInterval(() => { const s = Math.floor((Date.now() - bootStart) / 1000); $("boot-time").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") + " · " + ENGINES[engine][0] + " engine" + (lastMips ? " · " + lastMips + " MIPS" : ""); }, 1000);
   const shell = document.createElement("script"); shell.src = "shell.js";
   shell.onload = () => {
     Config.urlParams = "app=cm0102&p=cm0102_GDI.exe&sound=false&resolution=800x600&root=boxedwine";
@@ -534,7 +533,8 @@ function startEngine() {
       setInterval(diagSample, 3000);
       installPendingSaves().finally(() => origStart());
     };
-    installJitCap();
+    installJitWatch();
+    Module.cmJitOnFlush = () => { jitMem.sinceFlush = 0; jitMem.flushes++; diag.flushes = jitMem.flushes; };
     const eng = document.createElement("script"); eng.src = engine + "/boxedwine.js";
     eng.onerror = () => { $("boot-title").textContent = "Engine failed to load"; $("boot-text").textContent = "Reload the page and try the other engine."; };
     document.body.appendChild(eng);

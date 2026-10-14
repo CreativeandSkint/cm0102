@@ -1,11 +1,11 @@
 // Keeps every file of the game on the device so it opens and plays offline.
 // App files live in a versioned cache; the 140 MB of game data lives in its own
 // cache so app updates never re-download it.
-const APP_CACHE = "cm0102-app-v4";
+const APP_CACHE = "cm0102-app-v5";
 const DATA_CACHE = "cm0102-data-v1";
 const APP_FILES = [
   "./", "index.html", "shell.js", "manifest.webmanifest",
-  "st/boxedwine.js", "st/boxedwine.wasm", "jit/boxedwine.js", "jit/boxedwine.wasm",
+  "st/boxedwine.js", "st/boxedwine.wasm", "jit/boxedwine.js", "jit/boxedwine.wasm", "jitr/boxedwine.js", "jitr/boxedwine.wasm",
   "vendor/fflate.js", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png",
   "fonts/barlow-condensed-latin-500-normal.woff2", "fonts/barlow-condensed-latin-600-normal.woff2", "fonts/barlow-condensed-latin-700-normal.woff2",
   "fonts/barlow-latin-400-normal.woff2", "fonts/barlow-latin-500-normal.woff2", "fonts/barlow-latin-600-normal.woff2",
