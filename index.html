@@ -168,6 +168,18 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
           <h2>Saves on this iPad</h2>
           <div class="saves" id="device-saves"></div>
         </div>
+        <div class="section" id="savelog-card" hidden>
+          <details>
+            <summary class="fine" style="cursor:pointer">Save log (for troubleshooting)</summary>
+            <pre id="savelog" style="white-space:pre-wrap;font-size:12px;line-height:1.45;margin:8px 0 0;color:var(--muted);max-height:260px;overflow:auto"></pre>
+          </details>
+        </div>
+        <div class="section" id="safety-card" hidden>
+          <h2>Safety copies</h2>
+          <p class="fine">Taken each time the app confirms a save. If a save ever goes missing or comes back old, put a copy back here before kicking off.</p>
+          <div class="saves" id="safety-list"></div>
+          <div class="status" id="safety-status"></div>
+        </div>
         <div class="section">
           <h2>Bring in a save</h2>
           <div class="row">
@@ -197,6 +209,7 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
   </div>
   <div id="tools" hidden>
     <button type="button" id="t-handle" aria-label="Show tools" aria-expanded="false">‹</button>
+    <button type="button" id="t-home" title="Back to the launcher"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>Home</button>
     <button type="button" id="t-kbd" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="1.5"/><path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01M7 14h10"/></svg>Keys</button>
     <button type="button" id="t-rc" aria-pressed="false" title="Next tap is a right-click"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7M12 10h6"/></svg>Right</button>
     <button type="button" id="t-saves" title="Saves"><svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h7V3M8 21v-7h8v7"/></svg>Saves</button>
@@ -334,17 +347,18 @@ function idb() {
   dbp = new Promise(res => { try { const r = indexedDB.open("cm0102-pending", 1); r.onupgradeneeded = () => r.result.createObjectStore("saves"); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch (e) { res(null); } });
   return dbp;
 }
-async function pendingList() { const db = await idb(); if (!db) return []; return new Promise(res => { const out = []; const tx = db.transaction("saves"); const c = tx.objectStore("saves").openCursor(); c.onsuccess = () => { const cur = c.result; if (cur) { out.push({ name: cur.key, blob: cur.value }); cur.continue(); } else res(out); }; c.onerror = () => res(out); }); }
-async function pendingPut(name, blob) { const db = await idb(); if (!db) throw new Error("This browser won't store files"); return new Promise((res, rej) => { const tx = db.transaction("saves", "readwrite"); tx.objectStore("saves").put(blob, name); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+async function pendingList() { const db = await idb(); if (!db) return []; return new Promise(res => { const out = []; const tx = db.transaction("saves"); const c = tx.objectStore("saves").openCursor(); c.onsuccess = () => { const cur = c.result; if (cur) { out.push({ name: cur.key, blob: cur.value instanceof Blob ? cur.value : cur.value.blob, overwrite: !!(cur.value && cur.value.overwrite) }); cur.continue(); } else res(out); }; c.onerror = () => res(out); }); }
+async function pendingPut(name, blob, overwrite) { const db = await idb(); if (!db) throw new Error("This browser won't store files"); return new Promise((res, rej) => { const tx = db.transaction("saves", "readwrite"); tx.objectStore("saves").put(overwrite ? { blob, overwrite: true } : blob, name); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+async function pendingClear() { const db = await idb(); if (!db) return; return new Promise(res => { const tx = db.transaction("saves", "readwrite"); tx.objectStore("saves").clear(); tx.oncomplete = res; tx.onerror = res; }); }
 async function pendingDelete(name) { const db = await idb(); if (!db) return; return new Promise(res => { const tx = db.transaction("saves", "readwrite"); tx.objectStore("saves").delete(name); tx.oncomplete = res; tx.onerror = res; }); }
 
 async function renderPending() {
   const list = await pendingList(); const wrap = $("pending"); wrap.textContent = "";
-  for (const { name, blob } of list) {
+  for (const { name, blob, overwrite } of list) {
     const row = document.createElement("div"); row.className = "row";
     const lab = document.createElement("div"); lab.className = "label";
     const b = document.createElement("b"); b.textContent = name.replace(/\.sav$/i, "");
-    const sp = document.createElement("span"); sp.textContent = fmtMB(blob.size) + " · goes into the game when you kick off";
+    const sp = document.createElement("span"); sp.textContent = fmtMB(blob.size) + (overwrite ? " · replaces the save in the game when you kick off" : " · goes into the game when you kick off");
     lab.append(b, sp);
     const x = document.createElement("button"); x.type = "button"; x.className = "btn"; x.textContent = "Remove";
     x.onclick = async () => { await pendingDelete(name); renderPending(); };
@@ -426,6 +440,36 @@ document.addEventListener("visibilitychange", () => { if (started) { diag.phase 
 
 refreshStatus();
 
+(function showSaveLog() {
+  let lines = []; try { lines = JSON.parse(ls.get("cm-save-log", "[]")); } catch (e) {}
+  if (!lines.length) return;
+  $("savelog").textContent = lines.slice().reverse().join("\n");
+  $("savelog-card").hidden = false;
+})();
+
+(async function listSafetyCopies() {
+  const list = (await safetyList()).sort((a, b) => b.at - a.at);
+  if (!list.length) return;
+  const wrap = $("safety-list"); wrap.textContent = "";
+  for (const c of list) {
+    const row = document.createElement("div"); row.className = "row";
+    const lab = document.createElement("div"); lab.className = "label";
+    const b = document.createElement("b"); b.textContent = c.name.replace(/\.sav$/i, "");
+    const sp = document.createElement("span"); sp.textContent = "Copied " + new Date(c.at).toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) + " · " + fmtMB(c.size);
+    lab.append(b, sp);
+    const btn = document.createElement("button"); btn.type = "button"; btn.className = "btn"; btn.textContent = "Put back";
+    btn.onclick = async () => {
+      const rec = await safetyGet(c.key);
+      if (!rec) { $("safety-status").textContent = "That copy couldn't be read."; return; }
+      await pendingPut(c.name, rec.blob, true);
+      $("safety-status").textContent = c.name.replace(/\.sav$/i, "") + " from " + new Date(c.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) + " will replace the one in the game when you kick off.";
+      renderPending();
+    };
+    row.append(lab, btn); wrap.append(row);
+  }
+  $("safety-card").hidden = false;
+})();
+
 (async function listDeviceSaves() {
   try {
     const dbs = indexedDB.databases ? await indexedDB.databases() : [{ name: "/root/app/cm0102.zip" }];
@@ -479,25 +523,47 @@ $("kick").onclick = async () => {
 
 /* ===== Writing saves into the game folder ===== */
 function ensureDir(p) { try { FS.mkdirTree(p); } catch (e) {} }
-function persist() { return new Promise(res => { try { FS.syncfs(false, () => res()); } catch (e) { res(); } }); }
-let installedNow = "";
+function persist() { return syncNow("import"); }
+let installedNow = "", recoveredNow = [];
 async function installPendingSaves() {
   if (!pendingSaves.length) return;
   ensureDir(gameDir());
   const names = [];
-  for (const { name, blob } of pendingSaves) {
-    try { FS.writeFile(gameDir() + "/" + name, new Uint8Array(await blob.arrayBuffer())); names.push(name.replace(/\.sav$/i, "")); }
-    catch (e) { console.warn(e); }
+  const exists = n => { try { FS.stat(gameDir() + "/" + n); return true; } catch (e) { return false; } };
+  for (const { name, blob, overwrite } of pendingSaves) {
+    try {
+      // Never let an import replace a save the game has already written,
+      // unless this is a deliberate restore of a safety copy.
+      let target = name;
+      if (!overwrite && exists(target)) {
+        const base = name.replace(/\.sav$/i, "");
+        for (let i = 1; exists(target); i++) target = base + " (imported" + (i > 1 ? " " + i : "") + ").sav";
+      }
+      FS.writeFile(gameDir() + "/" + target, new Uint8Array(await blob.arrayBuffer()));
+      names.push(target.replace(/\.sav$/i, ""));
+    } catch (e) { console.warn(e); }
   }
   await persist();
-  for (const { name } of pendingSaves) await pendingDelete(name);
+  await pendingClear();
   pendingSaves.length = 0;
   installedNow = names.join(" and ");
 }
 
+/* ===== Home: back to the launcher =====
+   CM's own Exit Game just leaves Windows' empty blue desktop, so this is the
+   way out. Two taps, so a stray touch can't throw away unsaved progress. */
+let homeArmed = 0;
+$("t-home").onclick = async () => {
+  if (Date.now() - homeArmed > 4000) { homeArmed = Date.now(); toast("Tap Home again to leave. Anything you haven't saved in CM will be lost.", 4000); return; }
+  $("t-home").disabled = true;
+  if (gameShown) { toast("Making sure your saves are stored…", 8000); await syncNow("home"); }
+  diag.clean = true; diagWrite();
+  location.reload();
+};
+
 /* ===== Folding tool rail ===== */
 $("t-handle").onclick = () => { const open = $("tools").classList.toggle("open"); $("t-handle").setAttribute("aria-expanded", open); $("t-handle").textContent = open ? "›" : "‹"; };
-for (const id of ["t-kbd", "t-saves", "t-fs"]) $(id).addEventListener("click", () => { if (window.matchMedia("(max-aspect-ratio: 1.42/1)").matches) { $("tools").classList.remove("open"); $("t-handle").textContent = "‹"; } });
+for (const id of ["t-kbd", "t-saves", "t-fs", "t-home"]) $(id).addEventListener("click", () => { if (window.matchMedia("(max-aspect-ratio: 1.42/1)").matches) { $("tools").classList.remove("open"); $("t-handle").textContent = "‹"; } });
 
 /* ===== Saves drawer: back up and import while playing ===== */
 $("t-saves").onclick = () => { $("drawer").hidden = false; $("d-status").textContent = ""; };
@@ -565,7 +631,7 @@ function startEngine() {
       for (const k of Object.keys(ready)) delete ready[k];
       diag.phase = "starting Windows"; diagSample();
       setInterval(diagSample, 3000);
-      installPendingSaves().finally(() => origStart());
+      recoverFromSafetyCopies().then(r => { recoveredNow = r; }).finally(() => installPendingSaves().finally(() => origStart()));
     };
     installJitWatch();
     Module.cmJitOnFlush = () => { jitMem.sinceFlush = 0; jitMem.flushes++; diag.flushes = jitMem.flushes; };
@@ -586,45 +652,140 @@ function onWindowShown() {
   setTimeout(() => { $("boot").hidden = true; clearInterval(bootTimer); }, 6000);
   $("tools").hidden = false;
   if (installedNow) setTimeout(() => toast(installedNow + " is ready under Restore Saved Game", 4500), 7000);
+  if (recoveredNow.length) setTimeout(() => toast("Recovered your latest " + recoveredNow.join(" and ") + " save from its safety copy", 6000), 12000);
   watchSaves();
 }
 
 /* ===== Make sure saves reach the iPad's storage =====
-   The game folder lives in IndexedDB. Rather than trust the background
-   auto-sync, watch the .sav files: once one has changed and stopped changing,
-   write everything to storage straight away and say so. */
-let saveSyncBusy = false;
-function syncNow(reason) {
-  return new Promise(res => {
-    if (saveSyncBusy) return res(true);
-    saveSyncBusy = true;
-    try {
-      FS.syncfs(false, err => { saveSyncBusy = false; if (err) console.warn("sync failed", reason, err); res(!err); });
-    } catch (e) { saveSyncBusy = false; res(false); }
-  });
+   The game folder lives in IndexedDB through Emscripten's IDBFS. We don't trust
+   its background auto-sync, and we don't trust a sync callback alone either:
+   after a save we sync, then read the record back to check it matches, and
+   separately keep our own copy of the save as a Blob (which Safari stores as a
+   file). Everything is written to a save log the launcher can show. */
+const SAVE_LOG_KEY = "cm-save-log";
+function saveLog(msg) {
+  try {
+    const t = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const lines = JSON.parse(ls.get(SAVE_LOG_KEY, "[]"));
+    lines.push(t + "  " + msg);
+    ls.set(SAVE_LOG_KEY, JSON.stringify(lines.slice(-60)));
+  } catch (e) {}
 }
+let syncChain = Promise.resolve();
+function syncNow(reason) {
+  // Queue behind any sync already running; give up (and say so) after 90 s.
+  const run = () => new Promise(res => {
+    const t0 = Date.now(); let done = false;
+    const finish = (ok, why) => { if (done) return; done = true; saveLog("store (" + reason + ") " + (ok ? "ok" : "FAILED: " + why) + " in " + ((Date.now() - t0) / 1000).toFixed(1) + "s"); res(ok); };
+    const timer = setTimeout(() => finish(false, "timed out"), 90000);
+    try { FS.syncfs(false, err => { clearTimeout(timer); finish(!err, err ? String(err && (err.message || err.name) || err) : ""); }); }
+    catch (e) { clearTimeout(timer); finish(false, String(e)); }
+  });
+  const p = syncChain.then(run, run);
+  syncChain = p.catch(() => {});
+  return p;
+}
+function fileStamp(file) { const st = FS.stat(gameDir() + "/" + file); return { size: st.size, mtime: st.mtime.getTime ? st.mtime.getTime() : +st.mtime }; }
 function saveStamps() {
   const out = {};
-  try { for (const n of FS.readdir(gameDir())) if (/\.sav$/i.test(n)) { const st = FS.stat(gameDir() + "/" + n); out[n] = st.size + ":" + (st.mtime.getTime ? st.mtime.getTime() : st.mtime); } } catch (e) {}
+  try { for (const n of FS.readdir(gameDir())) if (/\.sav$/i.test(n)) { const st = fileStamp(n); out[n] = st.size + ":" + st.mtime; } } catch (e) {}
   return out;
 }
+// Read the game's own IndexedDB record for a file back and compare it with the file.
+async function verifyStored(file) {
+  try {
+    const want = fileStamp(file);
+    const db = await new Promise((res, rej) => { const r = indexedDB.open(ROOT); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    const rec = await new Promise(res => { const q = db.transaction("FILE_DATA").objectStore("FILE_DATA").get(gameDir() + "/" + file); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); });
+    db.close();
+    if (!rec) return "no record";
+    const ts = rec.timestamp && rec.timestamp.getTime ? rec.timestamp.getTime() : +rec.timestamp;
+    const size = rec.contents ? rec.contents.length : -1;
+    if (size !== want.size) return "size " + size + " vs " + want.size;
+    if (ts !== want.mtime) return "time " + ts + " vs " + want.mtime;
+    return "";
+  } catch (e) { return "check failed: " + e; }
+}
+
+/* ===== Safety copies =====
+   A second, independent copy of every confirmed save, kept outside the game's
+   own storage (last 3 per save). At kick off, a safety copy newer than the
+   game's own file is put back automatically; the launcher can also put back
+   any copy by hand. */
+var sdbp = null;
+function sdb() { return sdbp || (sdbp = new Promise(res => { try { const r = indexedDB.open("cm0102-safety", 1); r.onupgradeneeded = () => r.result.createObjectStore("copies"); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch (e) { res(null); } })); }
+async function safetyList() {
+  const db = await sdb(); if (!db) return [];
+  return new Promise(res => { const out = []; const c = db.transaction("copies").objectStore("copies").openCursor(); c.onsuccess = () => { const cur = c.result; if (!cur) return res(out); out.push({ key: cur.key, name: cur.value.name, at: cur.value.at, size: cur.value.size, fileTime: cur.value.fileTime || 0 }); cur.continue(); }; c.onerror = () => res(out); });
+}
+async function safetyGet(key) { const db = await sdb(); if (!db) return null; return new Promise(res => { const r = db.transaction("copies").objectStore("copies").get(key); r.onsuccess = () => res(r.result || null); r.onerror = () => res(null); }); }
+async function keepSafetyCopy(file) {
+  try {
+    const db = await sdb(); if (!db) return false;
+    const bytes = FS.readFile(gameDir() + "/" + file);
+    const at = Date.now();
+    const rec = { name: file, at, size: bytes.length, fileTime: fileStamp(file).mtime, blob: new Blob([bytes]) };
+    await new Promise((res, rej) => { const tx = db.transaction("copies", "readwrite"); tx.objectStore("copies").put(rec, file + "|" + at); tx.oncomplete = res; tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error || new Error("aborted")); });
+    const back = await safetyGet(file + "|" + at);
+    if (!back || !back.blob || back.blob.size !== bytes.length) throw new Error("read-back mismatch");
+    const mine = (await safetyList()).filter(c => c.name === file).sort((a, b) => b.at - a.at);
+    for (const old of mine.slice(3)) await new Promise(res => { const tx = db.transaction("copies", "readwrite"); tx.objectStore("copies").delete(old.key); tx.oncomplete = res; tx.onerror = res; });
+    saveLog("safety copy of " + file + " ok (" + fmtMB(bytes.length) + ")");
+    return true;
+  } catch (e) { saveLog("safety copy of " + file + " FAILED: " + (e && e.message || e)); return false; }
+}
+// Called at kick off, before Windows starts: put back any safety copy that is
+// newer than what the game's own storage holds for that save.
+async function recoverFromSafetyCopies() {
+  const recovered = [];
+  try {
+    const latest = {};
+    for (const c of await safetyList()) if (!latest[c.name] || c.at > latest[c.name].at) latest[c.name] = c;
+    for (const name of Object.keys(latest)) {
+      const c = latest[name];
+      let have = null; try { have = fileStamp(name); } catch (e) {}
+      if (have && have.size === c.size && have.mtime >= (c.fileTime || c.at) - 2000) continue;
+      if (have && have.mtime > c.at + 2000) continue; // the game's file is newer
+      const rec = await safetyGet(c.key); if (!rec) continue;
+      ensureDir(gameDir());
+      FS.writeFile(gameDir() + "/" + name, new Uint8Array(await rec.blob.arrayBuffer()));
+      recovered.push(name.replace(/\.sav$/i, ""));
+      saveLog("RECOVERED " + name + " from safety copy taken " + new Date(c.at).toLocaleString("en-GB") + (have ? " (game had " + fmtMB(have.size) + " from " + new Date(have.mtime).toLocaleString("en-GB") + ")" : " (game had none)"));
+    }
+    if (recovered.length) await syncNow("recover");
+  } catch (e) { saveLog("recovery check failed: " + e); }
+  return recovered;
+}
+
 function watchSaves() {
-  let last = saveStamps(), changed = null, stableFor = 0;
+  let last = saveStamps(), changed = null, stableFor = 0, tempSince = 0;
+  saveLog("watching saves: " + (Object.keys(last).join(", ") || "none yet"));
   setInterval(async () => {
     const now = saveStamps();
-    // CM writes temp_save_file.sav first, then renames it; wait for that to finish.
-    if (Object.keys(now).some(k => /^temp_save/i.test(k))) { stableFor = 0; return; }
-    const diff = Object.keys(now).filter(k => now[k] !== last[k]);
-    if (diff.length) { changed = diff[0]; stableFor = 0; last = now; return; }
+    // CM writes temp_save_file.sav first, then renames it. Wait for that, but
+    // not forever: a temp file left behind by an interrupted save is ignored.
+    const temp = Object.keys(now).filter(k => /^temp_save/i.test(k));
+    if (temp.length) {
+      if (!tempSince || last.__temp !== now[temp[0]]) { tempSince = Date.now(); last.__temp = now[temp[0]]; }
+      if (Date.now() - tempSince < 20000) { stableFor = 0; return; }
+    } else tempSince = 0;
+    const names = Object.keys(now).filter(k => !/^temp_save/i.test(k));
+    const diff = names.filter(k => now[k] !== last[k]);
+    if (diff.length) { changed = diff[0]; stableFor = 0; for (const k of names) last[k] = now[k]; saveLog("CM wrote " + diff.join(", ") + " (" + fmtMB(+now[diff[0]].split(":")[0]) + ")"); return; }
     if (!changed) return;
     if (++stableFor < 2) return;
-    const name = changed.replace(/\.sav$/i, ""); changed = null;
-    const ok = await syncNow("save");
-    toast(ok ? "\u2713 " + name + " saved to this iPad" : "Couldn't store " + name + " on this iPad. Try saving again.", ok ? 3000 : 6000);
+    const file = changed, name = file.replace(/\.sav$/i, ""); changed = null;
+    const synced = await syncNow("save");
+    const problem = synced ? await verifyStored(file) : "store failed";
+    if (problem) saveLog("check of " + file + " in storage: " + problem);
+    const kept = await keepSafetyCopy(file);
+    if (synced && !problem) toast("✓ " + name + " saved to this iPad" + (kept ? " + safety copy" : ""), 3500);
+    else if (kept) toast("✓ " + name + " kept as a safety copy (the game's own storage didn't confirm)", 6000);
+    else toast("⚠ " + name + " was NOT stored on this iPad. Save again before closing.", 9000);
   }, 3000);
 }
-document.addEventListener("visibilitychange", () => { if (document.hidden && gameShown) syncNow("hidden"); });
-window.addEventListener("pagehide", () => { if (gameShown) syncNow("pagehide"); });
+document.addEventListener("visibilitychange", () => { if (document.hidden && gameShown) syncNow("app hidden"); });
+window.addEventListener("pagehide", () => { if (gameShown) syncNow("app closed"); });
 
 
 /* ===== Touch, keyboard ===== */
