@@ -13,20 +13,38 @@ index eb0f6eb..cbb2c83 100644
  
      // syscalls
 diff --git a/source/emulation/cpu/jit/jitCodeGen.cpp b/source/emulation/cpu/jit/jitCodeGen.cpp
-index 3c3b26c..94bf0f4 100644
+index 3c3b26c..843b3be 100644
 --- a/source/emulation/cpu/jit/jitCodeGen.cpp
 +++ b/source/emulation/cpu/jit/jitCodeGen.cpp
-@@ -849,6 +849,19 @@ bool JitCodeGen::compileOps(DecodedOp* op) {
+@@ -802,6 +802,9 @@ bool JitCodeGen::compileOps(DecodedOp* op) {
+     DecodedOp* nextOp = op;
+     this->emulatedLen = 0;
+     this->blockOpCount = 0;
++#ifdef CM_BLOCK_CHUNK
++    const U32 cmChunkEnd = (this->currentEip | (U32)(CM_BLOCK_CHUNK - 1)) + 1;
++#endif
+ 
+     while (nextOp) {
+         if (nextOp->flags & OP_FLAG_NO_JIT) {
+@@ -849,6 +852,27 @@ bool JitCodeGen::compileOps(DecodedOp* op) {
                  jumpEip(eip);
                  break;
              }
-+#ifdef CM_MAX_BLOCK_OPS
-+            // CM 01/02 iPad build: end long straight-line blocks early. Without
-+            // this, every jump target inside a long run of code compiles its own
-+            // copy of everything up to the end of the run, which in CM's save
-+            // loader adds up to gigabytes of WebAssembly.
-+            if (this->blockOpCount >= CM_MAX_BLOCK_OPS && nextOp->next && !nextOp->isBranch()) {
-+                writeCurrentEip(0);
++#ifdef CM_BLOCK_CHUNK
++            // CM 01/02 iPad build: end long straight-line blocks at fixed
++            // CM_BLOCK_CHUNK-byte address boundaries. Without this, every jump
++            // target inside a long run of code compiles its own copy of
++            // everything up to the end of the run, which in CM's save loader adds
++            // up to gigabytes of WebAssembly. Cutting at a fixed boundary (not
++            // after a fixed op count) keeps every block that starts in the same
++            // chunk ending at the same instruction, so overlapping blocks still
++            // nest the way the op-ownership code expects.
++            // The next op starts at currentEip. Stop before any op that starts at
++            // or past the boundary, so blocks from neighbouring chunks never overlap.
++            if (this->currentEip >= cmChunkEnd && nextOp->next) {
++                if (!nextOp->isBranch()) {
++                    writeCurrentEip(0);
++                }
 +                RegPtr eip = getTmpReg();
 +                movValue(JitWidth::b32, eip, currentEip - cpu->seg[CS].address);
 +                jumpEip(eip);

@@ -164,6 +164,10 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
             </div>
           </div>
         </div>
+        <div class="section" id="device-saves-card" hidden>
+          <h2>Saves on this iPad</h2>
+          <div class="saves" id="device-saves"></div>
+        </div>
         <div class="section">
           <h2>Bring in a save</h2>
           <div class="row">
@@ -203,7 +207,7 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
   <div id="drawer" hidden>
     <div class="box">
       <h2>Saves</h2>
-      <p class="fine">Back up copies every save in the game folder into one zip. Import takes a .sav file, or a zip made by Back up. Save in the game before you back up. An imported save appears after you close and reopen the app.</p>
+      <p class="fine">Back up copies every save in the game folder into one zip. Import takes a .sav file, or a zip made by Back up. Save in the game before you back up, and wait for the “saved to this iPad” tick before closing the app. An imported save appears after you close and reopen the app.</p>
       <div class="row"><button class="btn" type="button" id="d-backup">Back up saves</button><button class="btn" type="button" id="d-import">Import a save</button></div>
       <input type="file" id="d-file" accept=".sav,.zip" hidden>
       <div class="status" id="d-status"></div>
@@ -422,6 +426,36 @@ document.addEventListener("visibilitychange", () => { if (started) { diag.phase 
 
 refreshStatus();
 
+(async function listDeviceSaves() {
+  try {
+    const dbs = indexedDB.databases ? await indexedDB.databases() : [{ name: "/root/app/cm0102.zip" }];
+    if (!dbs.some(d => d.name === "/root/app/cm0102.zip")) return;
+    const db = await new Promise((res, rej) => { const r = indexedDB.open("/root/app/cm0102.zip"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    if (!db.objectStoreNames.contains("FILE_DATA")) return;
+    const store = db.transaction("FILE_DATA").objectStore("FILE_DATA");
+    const found = [];
+    await new Promise(res => {
+      const src = store.indexNames.contains("timestamp") ? store.index("timestamp") : null;
+      if (!src) return res();
+      const c = src.openKeyCursor();
+      c.onsuccess = () => { const cur = c.result; if (!cur) return res(); const path = String(cur.primaryKey); if (/drive_c\/files\/[^/]+\.sav$/i.test(path)) found.push({ name: path.split("/").pop().replace(/\.sav$/i, ""), at: new Date(cur.key) }); cur.continue(); };
+      c.onerror = () => res();
+    });
+    db.close();
+    if (!found.length) return;
+    found.sort((a, b) => b.at - a.at);
+    const wrap = $("device-saves"); wrap.textContent = "";
+    for (const f of found) {
+      const row = document.createElement("div"); row.className = "row";
+      const lab = document.createElement("div"); lab.className = "label";
+      const b = document.createElement("b"); b.textContent = f.name;
+      const sp = document.createElement("span"); sp.textContent = "Last saved " + f.at.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      lab.append(b, sp); row.append(lab); wrap.append(row);
+    }
+    $("device-saves-card").hidden = false;
+  } catch (e) { console.warn("listDeviceSaves", e); }
+})();
+
 /* ===== Boot ===== */
 let started = false, bootStart = 0, bootTimer = 0, gameShown = false;
 $("kick").onclick = async () => {
@@ -552,7 +586,43 @@ function onWindowShown() {
   setTimeout(() => { $("boot").hidden = true; clearInterval(bootTimer); }, 6000);
   $("tools").hidden = false;
   if (installedNow) setTimeout(() => toast(installedNow + " is ready under Restore Saved Game", 4500), 7000);
+  watchSaves();
 }
+
+/* ===== Make sure saves reach the iPad's storage =====
+   The game folder lives in IndexedDB. Rather than trust the background
+   auto-sync, watch the .sav files: once one has changed and stopped changing,
+   write everything to storage straight away and say so. */
+let saveSyncBusy = false;
+function syncNow(reason) {
+  return new Promise(res => {
+    if (saveSyncBusy) return res(true);
+    saveSyncBusy = true;
+    try {
+      FS.syncfs(false, err => { saveSyncBusy = false; if (err) console.warn("sync failed", reason, err); res(!err); });
+    } catch (e) { saveSyncBusy = false; res(false); }
+  });
+}
+function saveStamps() {
+  const out = {};
+  try { for (const n of FS.readdir(gameDir())) if (/\.sav$/i.test(n)) { const st = FS.stat(gameDir() + "/" + n); out[n] = st.size + ":" + (st.mtime.getTime ? st.mtime.getTime() : st.mtime); } } catch (e) {}
+  return out;
+}
+function watchSaves() {
+  let last = saveStamps(), changed = null, stableFor = 0;
+  setInterval(async () => {
+    const now = saveStamps();
+    const diff = Object.keys(now).filter(k => now[k] !== last[k]);
+    if (diff.length) { changed = diff[0]; stableFor = 0; last = now; return; }
+    if (!changed) return;
+    if (++stableFor < 2) return;
+    const name = changed.replace(/\.sav$/i, ""); changed = null;
+    const ok = await syncNow("save");
+    toast(ok ? "\u2713 " + name + " saved to this iPad" : "Couldn't store " + name + " on this iPad. Try saving again.", ok ? 3000 : 6000);
+  }, 3000);
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden && gameShown) syncNow("hidden"); });
+window.addEventListener("pagehide", () => { if (gameShown) syncNow("pagehide"); });
 
 
 /* ===== Touch, keyboard ===== */
