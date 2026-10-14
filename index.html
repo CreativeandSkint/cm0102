@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>CM 01/02</title>
+<meta name="description" content="Championship Manager 01/02 running in the browser, offline.">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#050608">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CM 01/02">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<style>
+@font-face { font-family: "Barlow Condensed"; font-weight: 500; font-style: normal; font-display: swap; src: url("fonts/barlow-condensed-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 600; font-style: normal; font-display: swap; src: url("fonts/barlow-condensed-latin-600-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 700; font-style: normal; font-display: swap; src: url("fonts/barlow-condensed-latin-700-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow"; font-weight: 400; font-style: normal; font-display: swap; src: url("fonts/barlow-latin-400-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow"; font-weight: 500; font-style: normal; font-display: swap; src: url("fonts/barlow-latin-500-normal.woff2") format("woff2"); }
+@font-face { font-family: "Barlow"; font-weight: 600; font-style: normal; font-display: swap; src: url("fonts/barlow-latin-600-normal.woff2") format("woff2"); }
+
+/* Layout: a single full-screen stage. Launcher is a CM-style menu panel; the game canvas letterboxes at 4:3 with a tool rail in the spare side space. */
+:root {
+  --navy: #0b0f5c;        /* CM sidebar */
+  --navy-2: #151b8a;      /* panel borders */
+  --pitch: #0d3b12;       /* settings-panel green */
+  --pitch-2: #145a1c;
+  --red: #d8141c;         /* title bar */
+  --yellow: #ffd31a;      /* CM label yellow */
+  --ink: #f2f4ee;
+  --muted: #a9b7a6;
+  --black: #050608;
+  --display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --body: "Barlow", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+html { background: #050608; }
+body { margin: 0; background: var(--black); color: var(--ink); font-family: var(--body); overflow: hidden; -webkit-tap-highlight-color: transparent; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--yellow); outline-offset: 2px; }
+
+/* ---------- Launcher ---------- */
+#launcher { position: fixed; inset: 0; overflow-y: auto; display: grid; place-items: center;
+  padding-block: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,.025) 0 60px, rgba(0,0,0,0) 60px 120px),
+    radial-gradient(120% 90% at 50% 10%, var(--pitch-2), var(--pitch) 55%, #061d09 100%);
+}
+.board { width: min(760px, 100%); display: grid; grid-template-columns: 148px minmax(0, 1fr); border: 2px solid var(--navy-2); background: rgba(3, 8, 4, .55); box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+.rail { background: linear-gradient(180deg, var(--navy), #070a3d); border-right: 2px solid var(--navy-2); display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; }
+.rail .ver { font-family: var(--display); color: var(--yellow); text-align: center; font-size: 15px; line-height: 1.15; padding: 8px 0 12px; border-bottom: 1px solid var(--navy-2); letter-spacing: .02em; }
+.rail .ver b { display: block; font-size: 20px; }
+.rail .note { font-size: 12px; color: #b9bde8; line-height: 1.4; padding: 10px 4px 0; }
+.main { min-width: 0; display: flex; flex-direction: column; }
+.titlebar { background: var(--red); margin: 10px; padding: 10px 16px 8px; border: 1px solid #ff6a6a; box-shadow: inset 0 -3px 0 rgba(0,0,0,.25); }
+.titlebar h1 { margin: 0; font-family: var(--display); font-weight: 700; font-size: clamp(26px, 4.4vw, 40px); letter-spacing: .01em; line-height: 1; text-wrap: balance; color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,.35); }
+.panel { margin: 0 10px 10px; display: grid; gap: 10px; }
+.section { border: 1px solid var(--navy-2); background: rgba(0, 0, 0, .35); padding: 12px 14px; display: grid; gap: 10px; }
+.section h2 { margin: 0; font-family: var(--display); font-weight: 600; font-size: 15px; letter-spacing: .08em; text-transform: uppercase; color: var(--yellow); }
+.kick { appearance: none; border: 1px solid #7fd17f; background: linear-gradient(180deg, #2f8a35, #1c5e21); padding: 16px; font-family: var(--display); font-weight: 700; font-size: 28px; letter-spacing: .03em; cursor: pointer; color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,.4); }
+.kick:hover { filter: brightness(1.1); }
+.kick:disabled { opacity: .55; cursor: default; filter: none; }
+.status { font-size: 14px; color: var(--muted); min-height: 1.4em; line-height: 1.4; }
+.bar { height: 8px; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); }
+.bar > i { display: block; height: 100%; width: 0; background: var(--yellow); transition: width .2s; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: space-between; }
+.row .label { min-width: 0; flex: 1 1 200px; }
+.row .label b { font-family: var(--display); font-weight: 600; font-size: 19px; display: block; }
+.row .label span { font-size: 13px; color: var(--muted); }
+.seg { display: inline-flex; border: 1px solid var(--navy-2); }
+.seg button, .btn { appearance: none; border: 0; background: rgba(21, 27, 138, .35); padding: 8px 14px; cursor: pointer; font-family: var(--display); font-weight: 600; font-size: 16px; letter-spacing: .02em; color: #dfe3ff; }
+.btn { border: 1px solid var(--navy-2); }
+.seg button[aria-pressed="true"] { background: var(--yellow); color: #1b1600; }
+.btn:hover, .seg button:hover { filter: brightness(1.2); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn.done { background: transparent; color: var(--yellow); border-color: rgba(255, 211, 26, .5); }
+.saves { display: grid; gap: 8px; }
+.fine { font-size: 12.5px; color: var(--muted); line-height: 1.45; margin: 0; }
+@media (max-width: 620px) { .board { grid-template-columns: 1fr; } .rail { flex-direction: row; justify-content: space-between; align-items: center; border-right: 0; border-bottom: 2px solid var(--navy-2); } .rail .ver { border: 0; padding: 0; } .rail .note { padding: 0; max-width: 60%; } }
+
+/* ---------- Game stage ---------- */
+#stage { position: fixed; inset: 0; background: #000; display: none; }
+#stage.on { display: block; }
+#dropzone { position: absolute; inset: 0; container-type: size; display: flex; align-items: center; justify-content: center; touch-action: none; }
+div.emscripten_border { --boxedwine-canvas-width: 800; --boxedwine-canvas-height: 600; --boxedwine-canvas-aspect: calc(var(--boxedwine-canvas-width) / var(--boxedwine-canvas-height)); position: relative; aspect-ratio: 4 / 3; width: min(100cqw, calc(100cqh * 4 / 3)); line-height: 0; }
+canvas.emscripten { border: 0 none; position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#canvas { background: #000; }
+canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
+#dropzone:fullscreen { background: #000; }
+
+#tools { position: absolute; z-index: 5; display: flex; gap: 6px; right: max(8px, env(safe-area-inset-right, 0px)); top: 50%; transform: translateY(-50%); flex-direction: column; }
+#tools button { appearance: none; width: 52px; min-height: 52px; border: 1px solid var(--navy-2); background: rgba(11, 15, 92, .85); color: #e8ebff; font-family: var(--display); font-weight: 600; font-size: 12px; letter-spacing: .03em; cursor: pointer; display: grid; place-items: center; gap: 2px; padding: 6px 2px; }
+#tools button svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#tools button[aria-pressed="true"] { background: var(--yellow); color: #1b1600; }
+#tools .mips { font-family: var(--display); font-size: 11px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; line-height: 1.2; }
+@container (max-aspect-ratio: 1.38) { }
+@media (max-aspect-ratio: 1.42/1) { #tools { top: auto; transform: none; bottom: max(8px, env(safe-area-inset-bottom, 0px)); flex-direction: row; opacity: .85; } }
+#kbd { position: absolute; left: 0; bottom: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; font-size: 16px; border: 0; padding: 0; }
+
+#boot { position: absolute; z-index: 4; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100% - 32px)); background: rgba(5, 8, 40, .92); border: 1px solid var(--navy-2); padding: 18px 20px; display: grid; gap: 10px; }
+#boot b { font-family: var(--display); font-size: 22px; font-weight: 600; color: var(--yellow); }
+#boot p { margin: 0; font-size: 14px; color: #c8cbe8; line-height: 1.45; }
+#boot .t { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+
+#drawer { position: absolute; z-index: 6; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; padding: 16px; }
+#drawer .box { width: min(460px, 100%); background: var(--pitch); border: 1px solid var(--navy-2); padding: 16px; display: grid; gap: 12px; }
+#drawer h2 { margin: 0; font-family: var(--display); color: var(--yellow); font-size: 22px; font-weight: 600; }
+#toast { position: absolute; z-index: 7; left: 50%; bottom: max(18px, env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); background: var(--yellow); color: #1b1600; font-family: var(--display); font-weight: 600; font-size: 17px; padding: 8px 14px; }
+.stub { display: none !important; }
+@media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }
+</style>
+</head>
+<body>
+<div id="launcher">
+  <div class="board">
+    <aside class="rail">
+      <div class="ver"><b>3.9.60</b>Season 01/02</div>
+      <div class="note">A real copy of the PC game, running on this device. Plays offline once it has downloaded.</div>
+    </aside>
+    <div class="main">
+      <div class="titlebar"><h1>Championship Manager 01/02</h1></div>
+      <div class="panel">
+        <div class="section" id="install-hint" hidden>
+          <h2>Add it to your Home Screen first</h2>
+          <p class="fine">Tap the Share button, then Add to Home Screen, and open it from the new icon. The home screen app keeps its own copy of the game and your saves, separate from Safari, so do the first download there.</p>
+        </div>
+        <div class="section">
+          <button class="kick" id="kick" type="button">Kick off</button>
+          <div class="status" id="status-line">Checking what's already on this device…</div>
+          <div class="bar" aria-hidden="true"><i id="bar"></i></div>
+        </div>
+        <div class="section">
+          <h2>Engine</h2>
+          <div class="row">
+            <div class="label"><b id="engine-name">Fast</b><span id="engine-note">Compiles the game code as it runs.</span></div>
+            <div class="seg" role="group" aria-label="Engine">
+              <button type="button" id="eng-st" aria-pressed="false">Standard</button>
+              <button type="button" id="eng-jit" aria-pressed="true">Fast</button>
+            </div>
+          </div>
+        </div>
+        <div class="section">
+          <h2>Bring in a save</h2>
+          <div class="row">
+            <div class="label"><b>From Files</b><span>A .sav from your Mac (AirDrop it to the iPad first), or a backup zip made by this app.</span></div>
+            <button class="btn" type="button" id="l-import">Choose file</button>
+          </div>
+          <input type="file" id="l-file" accept=".sav,.zip,application/zip,application/octet-stream" multiple hidden>
+          <div class="status" id="l-status"></div>
+          <div class="saves" id="pending"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="stage">
+  <div id="dropzone">
+    <div class="emscripten_border">
+      <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+      <canvas class="emscripten boxedwine-webgl-canvas" id="boxedwine-webgl-canvas-0" oncontextmenu="event.preventDefault()"></canvas>
+    </div>
+  </div>
+  <div id="boot">
+    <b id="boot-title">Starting Windows</b>
+    <p id="boot-text">The game window appears when Windows has started. The first run on a new device takes longest.</p>
+    <div class="t" id="boot-time">0:00</div>
+  </div>
+  <div id="tools" hidden>
+    <button type="button" id="t-kbd" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="1.5"/><path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01M7 14h10"/></svg>Keys</button>
+    <button type="button" id="t-rc" aria-pressed="false" title="Next tap is a right-click"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7M12 10h6"/></svg>Right</button>
+    <button type="button" id="t-saves" title="Saves"><svg viewBox="0 0 24 24"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v5h7V3M8 21v-7h8v7"/></svg>Saves</button>
+    <button type="button" id="t-fs" title="Full screen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>Full</button>
+    <div class="mips" id="mips" title="Emulated speed, millions of instructions per second">–<br>MIPS</div>
+  </div>
+  <input id="kbd" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Type into the game">
+  <div id="drawer" hidden>
+    <div class="box">
+      <h2>Saves</h2>
+      <p class="fine">Back up copies every save in the game folder into one zip. Import takes a .sav file, or a zip made by Back up. Save in the game before you back up. An imported save appears after you close and reopen the app.</p>
+      <div class="row"><button class="btn" type="button" id="d-backup">Back up saves</button><button class="btn" type="button" id="d-import">Import a save</button></div>
+      <input type="file" id="d-file" accept=".sav,.zip" hidden>
+      <div class="status" id="d-status"></div>
+      <div class="row"><span></span><button class="btn" type="button" id="d-close">Back to the game</button></div>
+    </div>
+  </div>
+  <div id="toast" hidden></div>
+</div>
+
+<!-- Elements the Boxedwine shell expects to exist -->
+<div class="stub" aria-hidden="true">
+  <div id="loading"><figure id="spinner"></figure><div id="status"></div><progress id="progress" max="100" value="0"></progress></div>
+  <button id="startbtn"></button><button id="uploadbtn"></button><button id="downloadbtn"></button><button id="savejitbtn"></button>
+  <a id="modalLink" href="#x"></a><a id="modalLinkExe" href="#x"></a><a id="openModalExeClick" href="#x"></a>
+  <span id="sound-checkbox"><input id="soundToggle" type="checkbox"></span>
+  <input id="pointerLock" type="checkbox"><input id="showConsole" type="checkbox">
+  <textarea id="output"></textarea><div id="message"></div><div id="items"></div><div id="tree"></div><h3 id="loadStatus"></h3><input id="selectedItem">
+</div>
+
+
+<div class="stub" aria-hidden="true">
+  <div id="loading"><figure id="spinner"></figure><div id="status"></div><progress id="progress" max="100" value="0"></progress></div>
+  <button id="startbtn"></button><button id="uploadbtn"></button><button id="downloadbtn"></button><button id="savejitbtn"></button>
+  <a id="modalLink" href="#x"></a><a id="modalLinkExe" href="#x"></a><a id="openModalExeClick" href="#x"></a>
+  <span id="sound-checkbox"><input id="soundToggle" type="checkbox"></span>
+  <input id="pointerLock" type="checkbox"><input id="showConsole" type="checkbox">
+  <textarea id="output"></textarea><div id="message"></div><div id="items"></div><div id="tree"></div><h3 id="loadStatus"></h3><input id="selectedItem">
+</div>
+
+<script>
+/* ===== Data manifest ===== */
+const PACKS = {
+  root: { file: "boxedwine.zip", parts: [["root.0.bin",14500000],["root.1.bin",14500000],["root.2.bin",14500000],["root.3.bin",14500000],["root.4.bin",14500000],["root.5.bin",14500000],["root.6.bin",12985365]] },
+  game: { file: "cm0102.zip", parts: [["game.0.bin",14500000],["game.1.bin",14500000],["game.2.bin",11584504]] },
+};
+const ALL_PARTS = [...PACKS.root.parts, ...PACKS.game.parts];
+const TOTAL = ALL_PARTS.reduce((a, p) => a + p[1], 0);
+const GAME_DIR_REL = "/home/username/.wine/drive_c/files";
+const DATA_CACHE = "cm0102-data-v1";
+
+/* ===== Helpers ===== */
+const $ = id => document.getElementById(id);
+const ls = { get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+function fmtMB(n) { return (n / 1e6).toFixed(0) + " MB"; }
+let toastTimer = 0;
+function toast(msg, ms = 2600) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, ms); }
+
+/* ===== Offline support: the service worker keeps every file on the device ===== */
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(e => console.warn("service worker", e));
+async function isCached(name) { try { const c = await caches.open(DATA_CACHE); return !!(await c.match(new URL("data/" + name, location.href).href)); } catch (e) { return false; } }
+
+// Download (or read from the offline cache) a list of parts; returns one Blob.
+async function getParts(parts, onBytes) {
+  const blobs = [];
+  for (const [p, size] of parts) {
+    let b = null;
+    for (let attempt = 0; attempt < 3 && !b; attempt++) {
+      try {
+        const r = await fetch("data/" + p);
+        if (r.ok) { const x = await r.blob(); if (x.size === size) b = x; }
+      } catch (e) {}
+    }
+    if (!b) throw new Error("Couldn't download part of the game (" + p + ")");
+    blobs.push(b); onBytes(size);
+  }
+  return new Blob(blobs, { type: "application/zip" });
+}
+
+/* ===== Hand the assembled zips to the emulator through its own fetch() calls ===== */
+const ready = {};
+const realFetch = window.fetch.bind(window);
+window.fetch = function (input, init) {
+  const url = typeof input === "string" ? input : (input && input.url) || "";
+  const name = url.split("?")[0].split("/").pop();
+  if (ready[name]) return Promise.resolve(new Response(ready[name], { status: 200 }));
+  if (/-jit-modules\.zip$/.test(name)) return Promise.resolve(new Response("", { status: 404 }));
+  return realFetch(input, init);
+};
+
+/* ===== Engine choice ===== */
+let engine = ls.get("cm-engine", "jit");
+function renderEngine() {
+  $("eng-st").setAttribute("aria-pressed", engine === "st");
+  $("eng-jit").setAttribute("aria-pressed", engine === "jit");
+  $("engine-name").textContent = engine === "st" ? "Standard" : "Fast";
+  $("engine-note").textContent = engine === "st"
+    ? "Interprets every instruction. Use it only if Fast won't start. Much slower when processing matches."
+    : "Compiles the game code as it runs. Roughly 30 times quicker than Standard.";
+}
+$("eng-st").onclick = () => { engine = "st"; ls.set("cm-engine", engine); renderEngine(); };
+$("eng-jit").onclick = () => { engine = "jit"; ls.set("cm-engine", engine); renderEngine(); };
+renderEngine();
+
+/* ===== Saves waiting to go into the game folder (kept in IndexedDB until kick off) ===== */
+let dbp = null;
+function idb() {
+  if (dbp) return dbp;
+  dbp = new Promise(res => { try { const r = indexedDB.open("cm0102-pending", 1); r.onupgradeneeded = () => r.result.createObjectStore("saves"); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch (e) { res(null); } });
+  return dbp;
+}
+async function pendingList() { const db = await idb(); if (!db) return []; return new Promise(res => { const out = []; const tx = db.transaction("saves"); const c = tx.objectStore("saves").openCursor(); c.onsuccess = () => { const cur = c.result; if (cur) { out.push({ name: cur.key, blob: cur.value }); cur.continue(); } else res(out); }; c.onerror = () => res(out); }); }
+async function pendingPut(name, blob) { const db = await idb(); if (!db) throw new Error("This browser won't store files"); return new Promise((res, rej) => { const tx = db.transaction("saves", "readwrite"); tx.objectStore("saves").put(blob, name); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+async function pendingDelete(name) { const db = await idb(); if (!db) return; return new Promise(res => { const tx = db.transaction("saves", "readwrite"); tx.objectStore("saves").delete(name); tx.oncomplete = res; tx.onerror = res; }); }
+
+async function renderPending() {
+  const list = await pendingList(); const wrap = $("pending"); wrap.textContent = "";
+  for (const { name, blob } of list) {
+    const row = document.createElement("div"); row.className = "row";
+    const lab = document.createElement("div"); lab.className = "label";
+    const b = document.createElement("b"); b.textContent = name.replace(/\.sav$/i, "");
+    const sp = document.createElement("span"); sp.textContent = fmtMB(blob.size) + " · goes into the game when you kick off";
+    lab.append(b, sp);
+    const x = document.createElement("button"); x.type = "button"; x.className = "btn"; x.textContent = "Remove";
+    x.onclick = async () => { await pendingDelete(name); renderPending(); };
+    row.append(lab, x); wrap.append(row);
+  }
+}
+renderPending();
+
+let fflateP = null;
+function fflate() { return fflateP || (fflateP = new Promise((res, rej) => { const s = document.createElement("script"); s.src = "vendor/fflate.js"; s.onload = () => res(window.fflate); s.onerror = () => rej(new Error("Couldn't load the zip tool")); document.head.appendChild(s); })); }
+async function savesFromFile(f) {
+  if (/\.zip$/i.test(f.name)) {
+    const z = await fflate(); const buf = new Uint8Array(await f.arrayBuffer());
+    const out = await new Promise((res, rej) => z.unzip(buf, (err, o) => err ? rej(err) : res(o)));
+    return Object.entries(out).filter(([n]) => /\.sav$/i.test(n)).map(([n, bytes]) => ({ name: n.split("/").pop(), blob: new Blob([bytes]) }));
+  }
+  if (/\.sav$/i.test(f.name)) return [{ name: f.name, blob: f }];
+  return [];
+}
+$("l-import").onclick = () => $("l-file").click();
+$("l-file").onchange = async e => {
+  const files = [...e.target.files]; e.target.value = "";
+  $("l-status").textContent = "Reading…";
+  try {
+    let n = 0;
+    for (const f of files) for (const s of await savesFromFile(f)) { await pendingPut(s.name, s.blob); n++; }
+    $("l-status").textContent = n ? "Added. It'll be in Restore Saved Game after you kick off." : "No .sav files found in that.";
+    renderPending();
+  } catch (err) { $("l-status").textContent = "Couldn't add that file: " + (err.message || err); }
+};
+
+/* ===== Launcher status ===== */
+const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const appleTouch = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+if (appleTouch && !standalone) $("install-hint").hidden = false;
+async function refreshStatus() {
+  let have = 0, missing = 0;
+  for (const [p, size] of ALL_PARTS) { if (await isCached(p)) have++; else missing += size; }
+  if (have === ALL_PARTS.length) $("status-line").textContent = "Everything is on this device. Works with no connection.";
+  else if (have === 0) $("status-line").textContent = "First kick off downloads " + fmtMB(TOTAL) + ". After that it plays offline.";
+  else $("status-line").textContent = fmtMB(missing) + " still to download. After that it plays offline.";
+}
+refreshStatus();
+
+/* ===== Boot ===== */
+let started = false, bootStart = 0, bootTimer = 0, gameShown = false;
+$("kick").onclick = async () => {
+  if (started) return; started = true;
+  $("kick").disabled = true; $("kick").textContent = "Loading…";
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
+  let done = 0;
+  const tick = n => { done += n; $("bar").style.width = (100 * done / TOTAL).toFixed(1) + "%"; $("status-line").textContent = "Loading game files… " + fmtMB(done) + " of " + fmtMB(TOTAL); };
+  try {
+    ready["boxedwine.zip"] = await getParts(PACKS.root.parts, tick);
+    ready["cm0102.zip"] = await getParts(PACKS.game.parts, tick);
+    pendingSaves.push(...await pendingList());
+  } catch (e) {
+    $("status-line").textContent = e.message + ". Check the connection and try again.";
+    $("kick").disabled = false; $("kick").textContent = "Try again"; started = false; return;
+  }
+  startEngine();
+};
+
+/* ===== Writing saves into the game folder ===== */
+function ensureDir(p) { try { FS.mkdirTree(p); } catch (e) {} }
+function persist() { return new Promise(res => { try { FS.syncfs(false, () => res()); } catch (e) { res(); } }); }
+let installedNow = "";
+async function installPendingSaves() {
+  if (!pendingSaves.length) return;
+  ensureDir(gameDir());
+  const names = [];
+  for (const { name, blob } of pendingSaves) {
+    try { FS.writeFile(gameDir() + "/" + name, new Uint8Array(await blob.arrayBuffer())); names.push(name.replace(/\.sav$/i, "")); }
+    catch (e) { console.warn(e); }
+  }
+  await persist();
+  for (const { name } of pendingSaves) await pendingDelete(name);
+  pendingSaves.length = 0;
+  installedNow = names.join(" and ");
+}
+
+/* ===== Saves drawer: back up and import while playing ===== */
+$("t-saves").onclick = () => { $("drawer").hidden = false; $("d-status").textContent = ""; };
+$("d-close").onclick = () => { $("drawer").hidden = true; };
+function listSaves() { try { return FS.readdir(gameDir()).filter(n => /\.sav$/i.test(n)); } catch (e) { return []; } }
+$("d-backup").onclick = async () => {
+  const names = listSaves();
+  if (!names.length) { $("d-status").textContent = "No saves in the game folder yet. Save from inside the game first."; return; }
+  $("d-status").textContent = "Zipping " + names.length + " save" + (names.length > 1 ? "s" : "") + "…";
+  try {
+    const z = await fflate(); const files = {};
+    for (const n of names) files[n] = FS.readFile(gameDir() + "/" + n);
+    const data = await new Promise((res, rej) => z.zip(files, { level: 6 }, (err, out) => err ? rej(err) : res(out)));
+    const d = new Date(); const stamp = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    const file = new File([data], "cm0102-saves-" + stamp + ".zip", { type: "application/zip" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: file.name });
+      $("d-status").textContent = "Backup ready. Choose Save to Files to keep it.";
+    } else {
+      const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = file.name; document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 60000);
+      $("d-status").textContent = "Backup downloaded.";
+    }
+  } catch (e) { $("d-status").textContent = e && e.name === "AbortError" ? "Backup cancelled." : "Backup failed: " + (e.message || e); }
+};
+$("d-import").onclick = () => $("d-file").click();
+$("d-file").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  ensureDir(gameDir());
+  try {
+    $("d-status").textContent = "Copying…";
+    const saves = await savesFromFile(f);
+    for (const s of saves) FS.writeFile(gameDir() + "/" + s.name, new Uint8Array(await s.blob.arrayBuffer()));
+    await persist();
+    $("d-status").textContent = saves.length ? "Imported. Close and reopen the app to see it in Restore Saved Game." : "No .sav files found in that.";
+  } catch (err) { $("d-status").textContent = "Import failed: " + (err.message || err); }
+};
+
+const pendingSaves = [];
+function startEngine() {
+  $("launcher").hidden = true; $("stage").classList.add("on");
+  bootStart = Date.now();
+  bootTimer = setInterval(() => { const s = Math.floor((Date.now() - bootStart) / 1000); $("boot-time").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") + " · " + (engine === "st" ? "Standard" : "Fast") + " engine" + (lastMips ? " · " + lastMips + " MIPS" : ""); }, 1000);
+  const shell = document.createElement("script"); shell.src = "shell.js";
+  shell.onload = () => {
+    Config.urlParams = "app=cm0102&p=cm0102_GDI.exe&sound=false&resolution=800x600&root=boxedwine";
+    // Quiet console: parse what we need, keep nothing.
+    const watch = text => {
+      text = String(text);
+      const m = /\[MIPS\].*?avg=(\d+)/.exec(text);
+      if (m) { lastMips = +m[1]; $("mips").innerHTML = lastMips + "<br>MIPS"; return; }
+      if (!gameShown && /Showing Window/.test(text)) onWindowShown();
+    };
+    Module.print = function () { watch(Array.prototype.join.call(arguments, " ")); };
+    Module.printErr = function () { const t = Array.prototype.join.call(arguments, " "); watch(t); if (/abort|exception|RuntimeError/i.test(t)) console.warn(t); };
+    Module.setStatus = function () {};
+    // Copy queued saves into the game folder after the browser storage is
+    // mounted but before Windows starts, so the game sees them in its list.
+    const origStart = window.startEmulator;
+    window.startEmulator = function () { installPendingSaves().finally(() => origStart()); };
+    const eng = document.createElement("script"); eng.src = engine + "/boxedwine.js";
+    eng.onerror = () => { $("boot-title").textContent = "Engine failed to load"; $("boot-text").textContent = "Reload the page and try the other engine."; };
+    document.body.appendChild(eng);
+  };
+  document.body.appendChild(shell);
+}
+let lastMips = 0;
+function gameDir() { return ROOT + GAME_DIR_REL; }
+function onWindowShown() {
+  gameShown = true;
+  $("boot-title").textContent = "Windows is up";
+  $("boot-text").textContent = "Championship Manager is loading its database. The red title screen comes next.";
+  setTimeout(() => { $("boot").hidden = true; clearInterval(bootTimer); }, 6000);
+  $("tools").hidden = false;
+  if (installedNow) setTimeout(() => toast(installedNow + " is ready under Restore Saved Game", 4500), 7000);
+}
+
+
+/* ===== Touch, keyboard ===== */
+const SETTLE_MS = 320, HOLD_MS = 200;
+(function touchInput() {
+  const zone = $("dropzone");
+  let rightNext = false, start = null, dragging = false, holdTimer = 0, lastPinch = null, consumed = false;
+  const target = () => $("canvas");
+  function send(type, x, y, button, buttons) {
+    const ev = new MouseEvent(type, { clientX: x, clientY: y, screenX: x, screenY: y, button, buttons, bubbles: true, cancelable: true, view: window });
+    target().dispatchEvent(ev);
+  }
+  function wheel(dy, x, y) { target().dispatchEvent(new WheelEvent("wheel", { deltaY: dy, deltaMode: 0, clientX: x, clientY: y, bubbles: true, cancelable: true, view: window })); }
+  // The emulated game samples input once per frame, so the pointer has to settle
+  // over a button before the press, and the press has to last a few frames.
+  let lastMove = { x: -1, y: -1, at: 0 };
+  function moveTo(x, y) { send("mousemove", x, y, 0, 0); lastMove = { x, y, at: Date.now() }; }
+  function click(x, y, btn) {
+    const bits = btn === 2 ? 2 : 1;
+    const near = Math.hypot(lastMove.x - x, lastMove.y - y) < 4;
+    if (!near) moveTo(x, y);
+    const wait = Math.max(0, SETTLE_MS - (Date.now() - lastMove.at));
+    setTimeout(() => send("mousedown", x, y, btn, bits), wait);
+    setTimeout(() => send("mouseup", x, y, btn, 0), wait + HOLD_MS);
+  }
+  $("t-rc").onclick = () => { rightNext = !rightNext; $("t-rc").setAttribute("aria-pressed", rightNext); };
+  const opts = { capture: true, passive: false };
+  zone.addEventListener("touchstart", e => {
+    e.preventDefault(); e.stopPropagation();
+    if (e.touches.length === 2) { clearTimeout(holdTimer); const a = e.touches[0], b = e.touches[1]; lastPinch = (a.clientY + b.clientY) / 2; consumed = true; if (dragging) { send("mouseup", start.x, start.y, 0, 0); dragging = false; } return; }
+    if (e.touches.length > 2) return;
+    const t = e.changedTouches[0]; start = { x: t.clientX, y: t.clientY, time: Date.now() }; dragging = false; consumed = false;
+    moveTo(t.clientX, t.clientY);
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => { if (!dragging && !consumed && start) { consumed = true; click(start.x, start.y, 2); toast("Right-click", 900); } }, 650);
+  }, opts);
+  zone.addEventListener("touchmove", e => {
+    e.preventDefault(); e.stopPropagation();
+    if (e.touches.length === 2 && lastPinch !== null) { const a = e.touches[0], b = e.touches[1]; const y = (a.clientY + b.clientY) / 2; const dy = lastPinch - y; if (Math.abs(dy) > 12) { wheel(dy > 0 ? 100 : -100, a.clientX, y); lastPinch = y; } return; }
+    if (!start || consumed) return;
+    const t = e.changedTouches[0];
+    if (!dragging && Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10) { dragging = true; clearTimeout(holdTimer); send("mousedown", start.x, start.y, 0, 1); }
+    if (dragging) send("mousemove", t.clientX, t.clientY, 0, 1);
+  }, opts);
+  const end = e => {
+    e.preventDefault(); e.stopPropagation();
+    if (e.touches.length === 0) lastPinch = null;
+    clearTimeout(holdTimer);
+    if (!start) return;
+    const t = e.changedTouches[0];
+    if (dragging) send("mouseup", t.clientX, t.clientY, 0, 0);
+    else if (!consumed) { if (rightNext) { click(t.clientX, t.clientY, 2); rightNext = false; $("t-rc").setAttribute("aria-pressed", "false"); } else click(t.clientX, t.clientY, 0); }
+    start = null; dragging = false;
+  };
+  zone.addEventListener("touchend", end, opts);
+  zone.addEventListener("touchcancel", end, opts);
+})();
+
+/* ===== On-screen keyboard =====
+   Boxedwine reads key events on window by their physical "code" and ignores
+   events aimed at text fields, so keys typed into the hidden field are
+   re-sent to window with a code it understands. */
+(function keyboard() {
+  const inp = $("kbd");
+  $("t-kbd").onclick = () => { inp.focus({ preventScroll: true }); };
+  const PUNCT = { " ": "Space", ".": "Period", ",": "Comma", "-": "Minus", "'": "Quote", "/": "Slash", ";": "Semicolon", "=": "Equal" };
+  function codeFor(ch) {
+    if (/^[a-z]$/i.test(ch)) return "Key" + ch.toUpperCase();
+    if (/^[0-9]$/.test(ch)) return "Digit" + ch;
+    return PUNCT[ch] || null;
+  }
+  function fire(type, code, key) { window.dispatchEvent(new KeyboardEvent(type, { code, key, bubbles: true, cancelable: true })); }
+  function press(code, key, shift) {
+    if (shift) fire("keydown", "ShiftLeft", "Shift");
+    fire("keydown", code, key); fire("keyup", code, key);
+    if (shift) fire("keyup", "ShiftLeft", "Shift");
+  }
+  // Hardware keyboard while the field has focus: forward the real keys.
+  for (const type of ["keydown", "keyup"]) {
+    inp.addEventListener(type, e => {
+      if (!e.code || e.key === "Unidentified" || e.keyCode === 229) return;
+      e.preventDefault(); e.stopPropagation();
+      fire(type, e.code, e.key);
+      if (type === "keydown" && e.code === "Escape") inp.blur();
+    });
+  }
+  // On-screen keyboard: build key presses from the inserted text.
+  inp.addEventListener("input", e => {
+    if (e.inputType === "deleteContentBackward") press("Backspace", "Backspace", false);
+    else if (e.inputType === "insertLineBreak") press("Enter", "Enter", false);
+    else if (e.data) for (const ch of e.data) { const c = codeFor(ch); if (c) press(c, ch, ch !== ch.toLowerCase()); }
+    inp.value = "";
+  });
+  inp.addEventListener("keydown", e => { if (e.key === "Enter" && (e.keyCode === 229 || !e.code)) { e.preventDefault(); press("Enter", "Enter", false); } });
+})();
+
+/* ===== Full screen ===== */
+$("t-fs").onclick = () => {
+  const el = $("stage");
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (document.fullscreenElement || document.webkitFullscreenElement) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+  if (!req) { toast("Full screen isn't available here"); return; }
+  try { const p = req.call(el); if (p && p.catch) p.catch(() => toast("Full screen isn't available here")); } catch (e) { toast("Full screen isn't available here"); }
+};
+</script>
+</body>
+</html>
