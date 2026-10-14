@@ -612,6 +612,8 @@ function watchSaves() {
   let last = saveStamps(), changed = null, stableFor = 0;
   setInterval(async () => {
     const now = saveStamps();
+    // CM writes temp_save_file.sav first, then renames it; wait for that to finish.
+    if (Object.keys(now).some(k => /^temp_save/i.test(k))) { stableFor = 0; return; }
     const diff = Object.keys(now).filter(k => now[k] !== last[k]);
     if (diff.length) { changed = diff[0]; stableFor = 0; last = now; return; }
     if (!changed) return;
