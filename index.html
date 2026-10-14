@@ -205,6 +205,7 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
   <div id="tools" hidden>
     <button type="button" id="t-handle" aria-label="Show tools" aria-expanded="false">‹</button>
     <button type="button" id="t-home" title="Back to the launcher"><svg viewBox="0 0 24 24"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg>Home</button>
+    <button type="button" id="t-check" title="Make sure your saves are stored on this iPad"><svg viewBox="0 0 24 24"><path d="M5 4h11l3 3v13H5z"/><path d="M8 13l3 3 5-6"/></svg>Check</button>
     <button type="button" id="t-kbd" title="Keyboard"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="1.5"/><path d="M6 10h.01M9 10h.01M12 10h.01M15 10h.01M18 10h.01M7 14h10"/></svg>Keys</button>
     <button type="button" id="t-rc" aria-pressed="false" title="Next tap is a right-click"><svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 3v7M12 10h6"/></svg>Right</button>
     <button type="button" id="t-fs" title="Full screen"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>Full</button>
@@ -535,7 +536,8 @@ $("t-home").onclick = async () => {
 
 /* ===== Folding tool rail ===== */
 $("t-handle").onclick = () => { const open = $("tools").classList.toggle("open"); $("t-handle").setAttribute("aria-expanded", open); $("t-handle").textContent = open ? "›" : "‹"; };
-for (const id of ["t-kbd", "t-fs", "t-home"]) $(id).addEventListener("click", () => { if (window.matchMedia("(max-aspect-ratio: 1.42/1)").matches) { $("tools").classList.remove("open"); $("t-handle").textContent = "‹"; } });
+$("t-check").onclick = () => checkSaves();
+for (const id of ["t-kbd", "t-fs", "t-home", "t-check"]) $(id).addEventListener("click", () => { if (window.matchMedia("(max-aspect-ratio: 1.42/1)").matches) { $("tools").classList.remove("open"); $("t-handle").textContent = "‹"; } });
 
 /* ===== Saves drawer: back up and import while playing ===== */
 $("d-close").onclick = () => { $("drawer").hidden = true; };
@@ -736,39 +738,133 @@ async function recoverFromSafetyCopies() {
   return recovered;
 }
 
-function watchSaves() {
-  let last = saveStamps(), changed = null, stableFor = 0, tempSince = 0;
-  saveLog("watching saves: " + (Object.keys(last).join(", ") || "none yet"));
-  setInterval(async () => {
-    const now = saveStamps();
-    // CM writes temp_save_file.sav first, then renames it. Wait for that, but
-    // not forever: a temp file left behind by an interrupted save is ignored.
-    const temp = Object.keys(now).filter(k => /^temp_save/i.test(k));
-    if (temp.length) {
-      if (!tempSince || last.__temp !== now[temp[0]]) { tempSince = Date.now(); last.__temp = now[temp[0]]; }
-      if (Date.now() - tempSince < 20000) { stableFor = 0; return; }
-    } else tempSince = 0;
-    const names = Object.keys(now).filter(k => !/^temp_save/i.test(k));
-    // A save deleted in CM: drop its safety copy and store the deletion.
-    const gone = Object.keys(last).filter(k => k !== "__temp" && !/^temp_save/i.test(k) && !(k in now));
-    if (gone.length && !temp.length) {
-      for (const k of gone) { delete last[k]; await safetyDeleteFor(k); saveLog("CM deleted " + k); }
-      await syncNow("delete");
-      return;
-    }
-    const diff = names.filter(k => now[k] !== last[k]);
-    if (diff.length) { changed = diff[0]; stableFor = 0; for (const k of names) last[k] = now[k]; saveLog("CM wrote " + diff.join(", ") + " (" + fmtMB(+now[diff[0]].split(":")[0]) + ")"); return; }
-    if (!changed) return;
-    if (++stableFor < 2) return;
-    const file = changed, name = file.replace(/\.sav$/i, ""); changed = null;
-    const synced = await syncNow("save");
-    const problem = synced ? await verifyStored(file) : "store failed";
+/* ===== Save watcher =====
+   Not "did the file change since my last look" (that can miss a save and then
+   say nothing). Instead: every save CM has on disk must match what is stored on
+   this iPad. Anything that doesn't gets stored, checked, and retried until it
+   does. "confirmed" is what we've proved is in storage. */
+const tsMs = t => t && t.getTime ? t.getTime() : +t;
+function openRootDb() { return new Promise((res, rej) => { const r = indexedDB.open(ROOT); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function storedSaveTimes() {
+  const prefix = gameDir() + "/"; const out = {};
+  try {
+    const db = await openRootDb();
+    await new Promise(res => {
+      let c; try { c = db.transaction("FILE_DATA").objectStore("FILE_DATA").index("timestamp").openKeyCursor(); } catch (e) { return res(); }
+      c.onsuccess = () => { const cur = c.result; if (!cur) return res(); const k = String(cur.primaryKey); if (k.startsWith(prefix) && /\.sav$/i.test(k) && k.indexOf("/", prefix.length) < 0) out[k.slice(prefix.length)] = tsMs(cur.key); cur.continue(); };
+      c.onerror = () => res();
+    });
+    db.close();
+  } catch (e) { saveLog("couldn't read stored saves: " + e); }
+  return out;
+}
+async function storedBytes(file) {
+  try {
+    const db = await openRootDb();
+    const rec = await new Promise(res => { const q = db.transaction("FILE_DATA").objectStore("FILE_DATA").get(gameDir() + "/" + file); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); });
+    db.close(); return rec && rec.contents ? rec.contents : null;
+  } catch (e) { return null; }
+}
+function sameBytes(a, b) { if (!a || !b || a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; }
+// If CM rewrote a save but its timestamp didn't move, the storage layer would
+// skip it. Compare the actual bytes and nudge the timestamp if they differ.
+async function catchSilentRewrite(file) {
+  const path = gameDir() + "/" + file;
+  let disk; try { disk = FS.readFile(path); } catch (e) { return false; }
+  if (sameBytes(disk, await storedBytes(file))) return false;
+  const now = Date.now(); FS.utime(path, now, now);
+  saveLog(file + " differs from storage, marking it to be stored");
+  return true;
+}
+const mtimeOf = stamp => +String(stamp).split(":")[1];
+const clock = ms => new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+let confirmed = null, saveBusy = false, lastWarn = {};
+function tempActive(now, st) {
+  // CM writes temp_save_file.sav, then renames it. Wait for that, but not
+  // forever: a temp file left behind by an interrupted save is ignored.
+  const temp = Object.keys(now).filter(k => /^temp_save/i.test(k));
+  if (!temp.length) { st.tempSince = 0; return false; }
+  if (!st.tempSince || st.tempSig !== now[temp[0]]) { st.tempSince = Date.now(); st.tempSig = now[temp[0]]; }
+  return Date.now() - st.tempSince < 20000;
+}
+// Store everything that doesn't match, verify, report. Returns per-file results.
+async function storeUnmatched(names, gone, reason) {
+  const ok = await syncNow(reason);
+  const results = [];
+  for (const k of gone) if (ok) { delete confirmed[k]; await safetyDeleteFor(k); saveLog("CM deleted " + k); }
+  for (const file of names) {
+    let stamp; try { stamp = fileStamp(file); } catch (e) { continue; }
+    const problem = ok ? await verifyStored(file) : "store failed";
     if (problem) saveLog("check of " + file + " in storage: " + problem);
+    else confirmed[file] = stamp.mtime;
     const kept = await keepSafetyCopy(file);
-    if (synced && !problem) toast("✓ " + name + " saved", 3000);
-    else if (kept) toast("✓ " + name + " saved (backup copy)", 4000);
-    else toast("⚠ " + name + " was NOT stored on this iPad. Save again before closing.", 9000);
-  }, 3000);
+    results.push({ file, name: file.replace(/\.sav$/i, ""), mtime: stamp.mtime, stored: !problem, kept });
+  }
+  return results;
+}
+function sayResult(r, quiet) {
+  if (r.stored) { if (!quiet) toast("✓ " + r.name + " saved · " + clock(r.mtime), 3000); return; }
+  if (r.kept) { if (!quiet) toast("✓ " + r.name + " saved (backup copy) · " + clock(r.mtime), 4000); return; }
+  if (Date.now() - (lastWarn[r.file] || 0) < 30000) return;
+  lastWarn[r.file] = Date.now();
+  toast("⚠ " + r.name + " is NOT stored on this iPad yet. Retrying. Don't close the app.", 9000);
+}
+function watchSaves() {
+  const st = { tempSince: 0, tempSig: "", hadTemp: false, prev: {}, logged: {} };
+  storedSaveTimes().then(t => {
+    confirmed = t;
+    saveLog("watching saves: " + (Object.keys(t).join(", ") || "none yet"));
+    // Backstop: every 45 s compare the actual bytes, so even a save that
+    // slipped past everything above gets stored within a minute.
+    let lastDeep = Date.now();
+    setInterval(async () => {
+      if (saveBusy) return; saveBusy = true;
+      if (Date.now() - lastDeep > 45000 && !tempActive(saveStamps(), {})) { lastDeep = Date.now(); for (const n of Object.keys(confirmed)) { try { FS.stat(gameDir() + "/" + n); } catch (e) { continue; } await catchSilentRewrite(n); } }
+      try {
+        let now = saveStamps();
+        if (tempActive(now, st)) { st.hadTemp = true; st.prev = {}; return; }
+        const names = Object.keys(now).filter(k => !/^temp_save/i.test(k));
+        if (st.hadTemp) {
+          // A save just finished. Check the bytes too, in case the time lied.
+          st.hadTemp = false; saveLog("CM finished saving");
+          let nudged = false;
+          for (const n of names) if (mtimeOf(now[n]) === confirmed[n] && await catchSilentRewrite(n)) nudged = true;
+          if (nudged) now = saveStamps();
+        }
+        const unmatched = names.filter(n => mtimeOf(now[n]) !== confirmed[n]);
+        // Wait until the file has stopped changing for one poll.
+        const settled = unmatched.every(n => st.prev[n] === now[n]);
+        st.prev = now;
+        const gone = Object.keys(confirmed).filter(k => !(k in now));
+        if (!unmatched.length && !gone.length) return;
+        if (!settled) { for (const n of unmatched) if (st.logged[n] !== now[n]) { st.logged[n] = now[n]; saveLog("CM wrote " + n + " (" + fmtMB(+now[n].split(":")[0]) + ")"); } return; }
+        for (const r of await storeUnmatched(unmatched, gone, gone.length && !unmatched.length ? "delete" : "save")) sayResult(r);
+      } finally { saveBusy = false; }
+    }, 3000);
+  });
+}
+// The Check button: prove every save on disk is stored, by its bytes, and say
+// when the newest one was written so it's obvious if CM's own save didn't happen.
+async function checkSaves() {
+  if (!confirmed) { toast("Still starting up. Try again in a moment.", 3000); return; }
+  const st = {}; let waited = 0;
+  while (tempActive(saveStamps(), st) && waited < 30) { if (!waited) toast("CM is still saving, hang on…", 30000); await new Promise(r => setTimeout(r, 1000)); waited++; }
+  while (saveBusy) await new Promise(r => setTimeout(r, 300));
+  saveBusy = true;
+  try {
+    toast("Checking your saves…", 30000);
+    const names = Object.keys(saveStamps()).filter(k => !/^temp_save/i.test(k));
+    if (!names.length) { toast("No saves yet. Save from inside the game first.", 4000); return; }
+    for (const n of names) await catchSilentRewrite(n);
+    const now = saveStamps();
+    const gone = Object.keys(confirmed).filter(k => !(k in now));
+    const results = await storeUnmatched(names, gone, "check");
+    const bad = results.filter(r => !r.stored && !r.kept);
+    const newest = results.slice().sort((a, b) => b.mtime - a.mtime)[0];
+    saveLog("check: " + results.map(r => r.file + (r.stored ? " ok" : r.kept ? " backup only" : " NOT stored")).join(", "));
+    if (bad.length) { lastWarn = {}; sayResult(bad[0]); }
+    else toast("✓ All saves stored on this iPad. Newest: " + newest.name + ", written " + clock(newest.mtime) + ".", 6000);
+  } finally { saveBusy = false; }
 }
 document.addEventListener("visibilitychange", () => { if (document.hidden && gameShown) syncNow("app hidden"); });
 window.addEventListener("pagehide", () => { if (gameShown) syncNow("app closed"); });
