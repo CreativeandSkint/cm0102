@@ -98,11 +98,11 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
 #tools button svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 #tools button[aria-pressed="true"] { background: var(--yellow); color: #1b1600; }
 #tools .mips { font-family: var(--display); font-size: 11px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; line-height: 1.2; }
-#t-handle { display: none; }
+#tools #t-handle { display: none; }
 /* Screens too square for a side rail (13" iPads): the tools fold behind a small tab on the right edge. */
 @media (max-aspect-ratio: 1.42/1) {
   #tools { right: 0; padding-right: env(safe-area-inset-right, 0px); }
-  #t-handle { display: grid; width: 22px !important; min-height: 64px !important; padding: 0 !important; border-right: 0 !important; opacity: .8; font-size: 16px !important; }
+  #tools #t-handle { display: grid; width: 22px !important; min-height: 64px !important; padding: 0 !important; border-right: 0 !important; opacity: .8; font-size: 16px !important; }
   #tools:not(.open) > :not(#t-handle) { display: none; }
   #tools.open #t-handle { min-height: 22px !important; width: 52px !important; }
 }
@@ -152,6 +152,15 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
             <div class="seg" role="group" aria-label="Engine">
               <button type="button" id="eng-st" aria-pressed="false">Standard</button>
               <button type="button" id="eng-jit" aria-pressed="true">Fast</button>
+            </div>
+          </div>
+          <div class="row">
+            <div class="label"><b>Code memory</b><span id="cap-note">How much compiled game code the Fast engine may keep. Past the limit, new code runs slower instead of crashing.</span></div>
+            <div class="seg" role="group" aria-label="Code memory limit">
+              <button type="button" id="cap-400" aria-pressed="false">Low</button>
+              <button type="button" id="cap-700" aria-pressed="false">Medium</button>
+              <button type="button" id="cap-1100" aria-pressed="false">High</button>
+              <button type="button" id="cap-0" aria-pressed="false">Off</button>
             </div>
           </div>
         </div>
@@ -286,6 +295,33 @@ function renderEngine() {
 }
 $("eng-st").onclick = () => { engine = "st"; ls.set("cm-engine", engine); renderEngine(); };
 $("eng-jit").onclick = () => { engine = "jit"; ls.set("cm-engine", engine); renderEngine(); };
+
+/* ===== Compiled-code limit =====
+   The Fast engine turns game code into WebAssembly modules and keeps them.
+   CM can generate gigabytes of them over a few in-game days, and iPadOS kills
+   the page long before that. Past the limit we refuse new modules with an
+   "out of memory" error, which Boxedwine handles by running that code in its
+   interpreter instead. Live size is tracked, so freed modules give room back. */
+let capMB = +ls.get("cm-jit-cap", "0");
+function renderCap() { for (const v of [400, 700, 1100, 0]) $("cap-" + v).setAttribute("aria-pressed", capMB === v); }
+for (const v of [400, 700, 1100, 0]) $("cap-" + v).onclick = () => { capMB = v; ls.set("cm-jit-cap", String(v)); renderCap(); };
+renderCap();
+const jitMem = { live: 0, total: 0, refused: 0 };
+function installJitCap() {
+  const Orig = WebAssembly.Module;
+  const reg = typeof FinalizationRegistry === "function" ? new FinalizationRegistry(n => { jitMem.live -= n; }) : null;
+  function CappedModule(bytes) {
+    const n = (bytes && (bytes.byteLength || bytes.length)) || 0;
+    if (capMB && jitMem.live + n > capMB * 1048576) { jitMem.refused++; diag.capped = true; throw new RangeError("out of memory (code limit reached)"); }
+    const m = new Orig(bytes);
+    jitMem.live += n; jitMem.total += n;
+    if (reg) reg.register(m, n);
+    return m;
+  }
+  CappedModule.prototype = Orig.prototype;
+  for (const k of ["exports", "imports", "customSections"]) CappedModule[k] = Orig[k];
+  WebAssembly.Module = CappedModule;
+}
 renderEngine();
 
 /* ===== Saves waiting to go into the game folder (kept in IndexedDB until kick off) ===== */
@@ -355,6 +391,7 @@ function diagWrite() { diag.at = Date.now(); ls.set(DIAG_KEY, JSON.stringify(dia
 function diagSample() {
   try { if (typeof HEAPU8 !== "undefined") diag.wasmMB = Math.round(HEAPU8.length / 1048576); } catch (e) {}
   try { if (typeof Module !== "undefined") { diag.groups = Module.wasmJitRuntimeGroups ? Module.wasmJitRuntimeGroups.size : diag.groups; diag.oom = diag.oom || Module.wasmJitOomGeneration !== undefined; } } catch (e) {}
+  diag.jitLiveMB = Math.round(jitMem.live / 1048576); diag.jitTotalMB = Math.round(jitMem.total / 1048576); diag.cap = capMB;
   diag.mips = lastMips; diag.peakMips = Math.max(diag.peakMips, lastMips); diag.shown = gameShown;
   diagWrite();
 }
@@ -377,8 +414,9 @@ document.addEventListener("visibilitychange", () => { if (started) { diag.phase 
   if (!last || !last.started || last.clean) return;
   const mins = Math.max(1, Math.round((last.at - last.started) / 60000));
   $("crash-text").textContent = "After " + mins + " min on the " + (last.engine === "st" ? "Standard" : "Fast") + " engine, " + last.phase +
-    ". Memory " + last.wasmMB + " MB · compiled code " + last.jitMB + " MB in " + last.blocks + " blocks" + (last.groups ? " (" + last.groups + " modules)" : "") +
-    (last.oom ? " · compiled code ran out of room" : "") + " · " + last.mips + " MIPS at the end. Logged " + new Date(last.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) + ".";
+    ". Memory " + last.wasmMB + " MB · compiled code kept " + (last.jitLiveMB || 0) + " MB of " + (last.jitTotalMB || 0) + " MB made" + (last.groups ? " in " + last.groups + " modules" : "") +
+    " · limit " + (last.cap ? last.cap + " MB" : "off") + (last.capped ? " (reached)" : "") +
+     " · " + last.mips + " MIPS at the end. Logged " + new Date(last.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) + ".";
   $("crash-card").hidden = false;
   $("crash-dismiss").onclick = () => { $("crash-card").hidden = true; last.clean = true; ls.set(DIAG_KEY, JSON.stringify(last)); };
 })();
@@ -389,7 +427,7 @@ refreshStatus();
 let started = false, bootStart = 0, bootTimer = 0, gameShown = false;
 $("kick").onclick = async () => {
   if (started) return; started = true;
-  Object.assign(diag, { engine, started: Date.now(), phase: "loading files", peakMips: 0, blocks: 0, jitMB: 0, groups: 0, oom: false }); diagWrite();
+  Object.assign(diag, { engine, started: Date.now(), phase: "loading files", peakMips: 0, blocks: 0, jitMB: 0, groups: 0, oom: false, capped: false, jitLiveMB: 0, jitTotalMB: 0, clean: false }); diagWrite();
   $("crash-card").hidden = true;
   $("kick").disabled = true; $("kick").textContent = "Loading…";
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {}); } catch (e) {}
@@ -496,6 +534,7 @@ function startEngine() {
       setInterval(diagSample, 3000);
       installPendingSaves().finally(() => origStart());
     };
+    installJitCap();
     const eng = document.createElement("script"); eng.src = engine + "/boxedwine.js";
     eng.onerror = () => { $("boot-title").textContent = "Engine failed to load"; $("boot-text").textContent = "Reload the page and try the other engine."; };
     document.body.appendChild(eng);
