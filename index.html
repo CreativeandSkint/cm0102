@@ -152,11 +152,11 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
             <div class="seg" role="group" aria-label="Engine">
               <button type="button" id="eng-st" aria-pressed="false">Standard</button>
               <button type="button" id="eng-jit" aria-pressed="false">Fast</button>
-              <button type="button" id="eng-jitr" aria-pressed="true">Recycling</button>
+              <button type="button" id="eng-jitr" aria-pressed="true">iPad</button>
             </div>
           </div>
           <div class="row" id="cap-row">
-            <div class="label"><b>Recycle at</b><span id="cap-note">How much compiled code the Recycling engine builds up before it clears it out and starts afresh. Lower is safer, higher means fewer short pauses.</span></div>
+            <div class="label"><b>Recycle at</b><span id="cap-note">How much compiled code the iPad engine can build up before it clears it out and starts afresh. It rarely gets near this now.</span></div>
             <div class="seg" role="group" aria-label="Code memory limit">
               <button type="button" id="cap-300" aria-pressed="false">300 MB</button>
               <button type="button" id="cap-500" aria-pressed="false">500 MB</button>
@@ -286,8 +286,8 @@ window.fetch = function (input, init) {
 /* ===== Engine choice ===== */
 const ENGINES = {
   st: ["Standard", "Interprets every instruction. Use it only if the others won't start. Much slower when processing matches."],
-  jit: ["Fast", "The original fast engine. Keeps every bit of code it compiles, so on iPad it can run out of memory after a few in-game days."],
-  jitr: ["Recycling", "The fast engine, changed for iPad: when its compiled code passes the limit below it clears it out and rebuilds what's needed. Expect a brief slowdown when that happens."],
+  jit: ["Fast (original)", "The original fast engine. Keeps everything it compiles, so on iPad it runs out of memory after a few in-game days."],
+  jitr: ["Fast for iPad", "The fast engine, tuned for iPad. It compiles CM's code in smaller pieces, which uses about a tenth of the memory, and clears it out if it ever passes the limit below."],
 };
 let engine = ls.get("cm-engine-v2", "jitr");
 function renderEngine() {
