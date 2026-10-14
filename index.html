@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>CM 01/02</title>
-<meta name="description" content="Championship Manager 01/02 running in the browser, offline.">
+<meta name="description" content="CM0102, the classic PC football management game, running offline on iPad.">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#050608">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -56,6 +56,12 @@ button { font: inherit; color: inherit; }
 .rail .ver { font-family: var(--display); color: var(--yellow); text-align: center; font-size: 15px; line-height: 1.15; padding: 8px 0 12px; border-bottom: 1px solid var(--navy-2); letter-spacing: .02em; }
 .rail .ver b { display: block; font-size: 20px; }
 .rail .note { font-size: 12px; color: #b9bde8; line-height: 1.4; padding: 10px 4px 0; }
+.rail .legal { margin-top: auto; padding: 14px 4px 4px; border-top: 1px solid var(--navy-2); display: grid; gap: 8px; }
+.rail .legal h3 { margin: 0; font-family: var(--display); font-weight: 600; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; color: var(--yellow); }
+.rail .legal p { margin: 0; font-size: 11.5px; line-height: 1.45; color: #9da2d6; }
+.rail .legal .tiny { font-size: 10.5px; }
+.rail .coffee { display: block; text-align: center; text-decoration: none; font-family: var(--display); font-weight: 600; font-size: 14px; letter-spacing: .02em; color: var(--yellow); border: 1px solid rgba(255,211,26,.5); padding: 7px 4px; }
+.rail .coffee:hover { background: rgba(255,211,26,.1); }
 .main { min-width: 0; display: flex; flex-direction: column; }
 .titlebar { background: var(--red); margin: 10px; padding: 10px 16px 8px; border: 1px solid #ff6a6a; box-shadow: inset 0 -3px 0 rgba(0,0,0,.25); }
 .titlebar h1 { margin: 0; font-family: var(--display); font-weight: 700; font-size: clamp(26px, 4.4vw, 40px); letter-spacing: .01em; line-height: 1; text-wrap: balance; color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,.35); }
@@ -81,7 +87,7 @@ button { font: inherit; color: inherit; }
 .btn.done { background: transparent; color: var(--yellow); border-color: rgba(255, 211, 26, .5); }
 .saves { display: grid; gap: 8px; }
 .fine { font-size: 12.5px; color: var(--muted); line-height: 1.45; margin: 0; }
-@media (max-width: 620px) { .board { grid-template-columns: 1fr; } .rail { flex-direction: row; justify-content: space-between; align-items: center; border-right: 0; border-bottom: 2px solid var(--navy-2); } .rail .ver { border: 0; padding: 0; } .rail .note { padding: 0; max-width: 60%; } }
+@media (max-width: 620px) { .board { grid-template-columns: 1fr; } .rail { flex-direction: row; justify-content: space-between; align-items: center; border-right: 0; border-bottom: 2px solid var(--navy-2); } .rail .ver { border: 0; padding: 0; } .rail .note { padding: 0; max-width: 60%; } .rail { flex-wrap: wrap; } .rail .legal { flex: 1 1 100%; margin-top: 8px; padding: 10px 0 2px; } .rail .coffee { justify-self: start; padding: 7px 14px; } }
 
 /* ---------- Game stage ---------- */
 #stage { position: fixed; inset: 0; background: #000; display: none; }
@@ -127,9 +133,17 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
     <aside class="rail">
       <div class="ver"><b>3.9.60</b>Season 01/02</div>
       <div class="note">A real copy of the PC game, running on this device. Plays offline once it has downloaded.</div>
+      <div class="legal">
+        <h3>Why this exists</h3>
+        <p>My all time favourite game, rebuilt to run on an iPad so I can play it on the go.</p>
+        <p>Unofficial and fan made. Not affiliated with or endorsed by the game's makers or publishers, who own all rights.</p>
+        <p>It has no ads, never will, and it will always be free.</p>
+        <a class="coffee" href="https://www.creativeandskint.com/buymeacoffee" target="_blank" rel="noopener">☕ Buy me a coffee</a>
+        <p class="tiny">Totally optional. Just a cheers.</p>
+      </div>
     </aside>
     <div class="main">
-      <div class="titlebar"><h1>Championship Manager 01/02</h1></div>
+      <div class="titlebar"><h1>CM0102</h1></div>
       <div class="panel">
         <div class="section" id="crash-card" hidden>
           <h2>Last game closed unexpectedly</h2>
@@ -173,7 +187,6 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
             <summary class="fine" style="cursor:pointer">Save log (for troubleshooting)</summary>
             <pre id="savelog" style="white-space:pre-wrap;font-size:12px;line-height:1.45;margin:8px 0 0;color:var(--muted);max-height:260px;overflow:auto"></pre>
           </details>
-        </div>
         </div>
         <div class="section">
           <h2>Bring in a save</h2>
@@ -621,7 +634,7 @@ function onWindowShown() {
   diag.phase = "playing";
   gameShown = true;
   $("boot-title").textContent = "Windows is up";
-  $("boot-text").textContent = "Championship Manager is loading its database. The red title screen comes next.";
+  $("boot-text").textContent = "The game is loading its database. The red title screen comes next.";
   setTimeout(() => { $("boot").hidden = true; clearInterval(bootTimer); }, 6000);
   $("tools").hidden = false;
   if (installedNow) setTimeout(() => toast(installedNow + " is ready under Restore Saved Game", 4500), 7000);
