@@ -621,7 +621,7 @@ function startEngine() {
       for (const k of Object.keys(ready)) delete ready[k];
       diag.phase = "starting Windows"; diagSample();
       setInterval(diagSample, 3000);
-      recoverFromSafetyCopies().then(r => { recoveredNow = r; }).finally(() => installPendingSaves().finally(() => origStart()));
+      rescueMixedSaves().then(r => { rescuedNow = r; }).finally(() => recoverFromSafetyCopies().then(r => { recoveredNow = r; }).finally(() => installPendingSaves().finally(() => origStart())));
     };
     installJitWatch();
     Module.cmJitOnFlush = () => { jitMem.sinceFlush = 0; jitMem.flushes++; diag.flushes = jitMem.flushes; };
@@ -642,6 +642,7 @@ function onWindowShown() {
   setTimeout(() => { $("boot").hidden = true; clearInterval(bootTimer); }, 6000);
   $("tools").hidden = false;
   if (installedNow) setTimeout(() => toast(installedNow + " is ready under Restore Saved Game", 4500), 7000);
+  if (rescuedNow.length) setTimeout(() => toast("Found and restored your lost " + rescuedNow.join(" and ") + " save", 6000), 9000);
   if (recoveredNow.length) setTimeout(() => toast("Restored your latest " + recoveredNow.join(" and ") + " save", 5000), 12000);
   watchSaves();
 }
@@ -728,6 +729,34 @@ async function keepSafetyCopy(file) {
     return true;
   } catch (e) { saveLog("safety copy of " + file + " FAILED: " + (e && e.message || e)); return false; }
 }
+// An emulator bug (fixed in the iPad engine) sent every save after the first
+// over the same file to "<name>.sav.mixed", where the game never looks. Before
+// Windows starts, put any newer stranded copy back in place.
+let rescuedNow = [];
+async function rescueMixedSaves() {
+  const out = [];
+  try {
+    const d = gameDir();
+    let names; try { names = FS.readdir(d); } catch (e) { return out; } // first run: no game folder yet
+    for (const m of names.filter(n => /\.sav\.mixed$/i.test(n))) {
+      const real = m.slice(0, -6);
+      let mm, rm = null;
+      try { mm = FS.stat(d + "/" + m).mtime.getTime(); } catch (e) { continue; }
+      try { rm = FS.stat(d + "/" + real).mtime.getTime(); } catch (e) {}
+      if (rm === null || mm > rm) {
+        FS.rename(d + "/" + m, d + "/" + real);
+        const now = Date.now(); FS.utime(d + "/" + real, now, now);
+        out.push(real.replace(/\.sav$/i, ""));
+        saveLog("RESCUED " + real + " from a stranded save written " + new Date(mm).toLocaleString("en-GB"));
+      } else { FS.unlink(d + "/" + m); saveLog("removed an older stranded copy of " + real); }
+    }
+    // A temp save left from an interrupted save is never needed before Windows starts.
+    let tidied = false;
+    for (const t of names.filter(n => /^temp_save/i.test(n))) { try { FS.unlink(d + "/" + t); tidied = true; saveLog("removed leftover " + t); } catch (e) {} }
+    if (out.length || tidied) await syncNow("rescue");
+  } catch (e) { saveLog("rescue check failed: " + (e && (e.message || e.code || e.errno) || e)); }
+  return out;
+}
 // Called at kick off, before Windows starts: put back any safety copy that is
 // newer than what the game's own storage holds for that save.
 async function recoverFromSafetyCopies() {
@@ -795,7 +824,7 @@ async function catchSilentRewrite(file) {
 }
 const mtimeOf = stamp => +String(stamp).split(":")[1];
 const clock = ms => new Date(ms).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-let confirmed = null, saveBusy = false, lastWarn = {};
+let confirmed = null, saveBusy = false, lastWarn = {}, failedAt = {};
 function tempActive(now, st) {
   // CM writes temp_save_file.sav, then renames it. Wait for that, but not
   // forever: a temp file left behind by an interrupted save is ignored.
@@ -813,8 +842,8 @@ async function storeUnmatched(names, gone, reason) {
   for (const file of names) {
     let stamp; try { stamp = fileStamp(file); } catch (e) { continue; }
     const problem = ok ? await verifyStored(file) : "store failed";
-    if (problem) saveLog("check of " + file + " in storage: " + problem);
-    else confirmed[file] = stamp.mtime;
+    if (problem) { saveLog("check of " + file + " in storage: " + problem); failedAt[file] = Date.now(); }
+    else { confirmed[file] = stamp.mtime; delete failedAt[file]; }
     const kept = await keepSafetyCopy(file);
     results.push({ file, name: file.replace(/\.sav$/i, ""), mtime: stamp.mtime, stored: !problem, kept });
   }
@@ -859,7 +888,8 @@ function watchSaves() {
           for (const n of names) if (mtimeOf(now[n]) === confirmed[n] && await catchSilentRewrite(n)) nudged = true;
           if (nudged) now = saveStamps();
         }
-        const unmatched = names.filter(n => mtimeOf(now[n]) !== confirmed[n]);
+        // After a failed store, wait 30 s before trying that file again.
+        const unmatched = names.filter(n => mtimeOf(now[n]) !== confirmed[n] && Date.now() - (failedAt[n] || 0) > 30000);
         // Wait until the file has stopped changing for one poll.
         const settled = unmatched.every(n => st.prev[n] === now[n]);
         st.prev = now;

@@ -54,6 +54,26 @@ index 3c3b26c..843b3be 100644
              nextOp = nextOp->next;
          }
      }
+diff --git a/source/io/fsfilenode.cpp b/source/io/fsfilenode.cpp
+index 1cfe24c..f841622 100644
+--- a/source/io/fsfilenode.cpp
++++ b/source/io/fsfilenode.cpp
+@@ -534,6 +534,15 @@ U32 FsFileNode::rename(BString path) {
+     if (!parent) {
+         return -K_ENOENT;
+     }
++    // Canonicalise the destination through any symlinked parent directory (Wine's
++    // dosdevices/e: -> ../drive_c/files). Otherwise the renamed node is attached
++    // under the symlink node, later lookups through the real directory miss it,
++    // and the next rename over the same name is diverted to a "<name>.mixed" file.
++    {
++        BString localName = Fs::getFileNameFromPath(path);
++        BString parentPath = parent->path;
++        path = parentPath.endsWith("/") ? parentPath + localName : parentPath + "/" + localName;
++    }
+ 
+     BString fileName = Fs::getFileNameFromPath(path);
+     Fs::localNameToRemote(fileName);
 diff --git a/source/kernel/kscheduler.cpp b/source/kernel/kscheduler.cpp
 index cc16ae6..f259c9d 100644
 --- a/source/kernel/kscheduler.cpp
