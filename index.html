@@ -801,6 +801,7 @@ function tempActive(now, st) {
   // forever: a temp file left behind by an interrupted save is ignored.
   const temp = Object.keys(now).filter(k => /^temp_save/i.test(k));
   if (!temp.length) { st.tempSince = 0; return false; }
+  if (st.ignore && now[temp[0]] === st.ignore) return false; // a known leftover
   if (!st.tempSince || st.tempSig !== now[temp[0]]) { st.tempSince = Date.now(); st.tempSig = now[temp[0]]; }
   return Date.now() - st.tempSince < 20000;
 }
@@ -827,7 +828,8 @@ function sayResult(r, quiet) {
   toast("⚠ " + r.name + " is NOT stored on this iPad yet. Retrying. Don't close the app.", 9000);
 }
 function watchSaves() {
-  const st = { tempSince: 0, tempSig: "", hadTemp: false, prev: {}, logged: {} };
+  const st = { tempSince: 0, tempSig: "", hadTemp: false, prev: {}, logged: {}, ignore: null };
+  { const n0 = saveStamps(); const t0 = Object.keys(n0).find(k => /^temp_save/i.test(k)); if (t0) st.ignore = n0[t0]; }
   storedSaveTimes().then(t => {
     confirmed = t;
     saveLog("watching saves: " + (Object.keys(t).join(", ") || "none yet"));
@@ -839,7 +841,16 @@ function watchSaves() {
       if (Date.now() - lastDeep > 45000 && !tempActive(saveStamps(), {})) { lastDeep = Date.now(); for (const n of Object.keys(confirmed)) { try { FS.stat(gameDir() + "/" + n); } catch (e) { continue; } await catchSilentRewrite(n); } }
       try {
         let now = saveStamps();
-        if (tempActive(now, st)) { st.hadTemp = true; st.prev = {}; return; }
+        if (tempActive(now, st)) {
+          if (!st.hadTemp) { saveLog("CM started saving"); toast("Saving… wait for the tick", 25000); }
+          st.hadTemp = true; st.prev = {}; return;
+        }
+        if (st.hadTemp && Object.keys(now).some(k => /^temp_save/i.test(k))) {
+          // CM began a save and never finished it: its half-written file is still there.
+          saveLog("CM's save did NOT finish (temp file left behind)");
+          toast("⚠ The game's save didn't finish. Save again.", 10000);
+          st.ignore = now[Object.keys(now).find(k => /^temp_save/i.test(k))];
+        }
         const names = Object.keys(now).filter(k => !/^temp_save/i.test(k));
         if (st.hadTemp) {
           // A save just finished. Check the bytes too, in case the time lied.
