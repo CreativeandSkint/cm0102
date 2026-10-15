@@ -14,7 +14,7 @@ Saves live on the device. Use Saves → Back up saves in the game to keep a copy
 
 - `index.html` launcher, touch-to-mouse controls, save import and backup
 - `sw.js` service worker that keeps everything on the device
-- `shell.js`, `st/`, `jit/` Boxedwine web build (GPL v2), Standard and Fast engines
+- `shell.js` Boxedwine web shell (GPL v2)
 - `data/` the Wine 11 filesystem with a prepared Windows prefix and a virtual CD drive, plus the game, split into 14.5 MB parts
 
 Boxedwine is GPL v2, Wine is LGPL. Championship Manager 01/02 is © Sports Interactive / Eidos, released as freeware.

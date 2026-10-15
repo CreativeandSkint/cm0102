@@ -166,12 +166,7 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
         <div class="section">
           <h2>Engine</h2>
           <div class="row">
-            <div class="label"><b id="engine-name">Fast</b><span id="engine-note">Compiles the game code as it runs.</span></div>
-            <div class="seg" role="group" aria-label="Engine">
-              <button type="button" id="eng-st" aria-pressed="false">Standard</button>
-              <button type="button" id="eng-jit" aria-pressed="false">Fast</button>
-              <button type="button" id="eng-jitr" aria-pressed="true">iPad</button>
-            </div>
+            <div class="label"><b id="engine-name">Fast for iPad</b><span id="engine-note"></span></div>
           </div>
           <div class="row" id="cap-row">
             <div class="label"><b>Recycle at</b><span id="cap-note">How much compiled code the iPad engine can build up before it clears it out and starts afresh. It rarely gets near this now.</span></div>
@@ -312,20 +307,17 @@ window.fetch = function (input, init) {
   return realFetch(input, init);
 };
 
-/* ===== Engine choice ===== */
+/* ===== Engine =====
+   Only the iPad engine ships now: the original Standard and Fast builds were
+   either too slow or ran out of memory, and both stranded saves (see jitr/README). */
 const ENGINES = {
-  st: ["Standard", "Interprets every instruction. Use it only if the others won't start. Much slower when processing matches."],
-  jit: ["Fast (original)", "The original fast engine. Keeps everything it compiles, so on iPad it runs out of memory after a few in-game days."],
-  jitr: ["Fast for iPad", "The fast engine, tuned for iPad. It compiles CM's code in smaller pieces, which uses about a tenth of the memory, and clears it out if it ever passes the limit below."],
+  jitr: ["Fast for iPad", "Compiles CM's code in small pieces as it runs, which keeps memory low, and clears it out if it ever passes the limit below. Works on iPad and desktop."],
 };
-let engine = ls.get("cm-engine-v2", "jitr");
+const engine = "jitr";
 function renderEngine() {
-  for (const k of Object.keys(ENGINES)) $("eng-" + k).setAttribute("aria-pressed", engine === k);
   $("engine-name").textContent = ENGINES[engine][0];
   $("engine-note").textContent = ENGINES[engine][1];
-  $("cap-row").hidden = engine !== "jitr";
 }
-for (const k of Object.keys(ENGINES)) $("eng-" + k).onclick = () => { engine = k; ls.set("cm-engine-v2", engine); renderEngine(); };
 
 /* ===== Compiled-code recycling =====
    Every WebAssembly module the engine compiles passes through here, so we
@@ -442,7 +434,7 @@ document.addEventListener("visibilitychange", () => { if (started) { diag.phase 
   let last = null; try { last = JSON.parse(ls.get(DIAG_KEY, "null")); } catch (e) {}
   if (!last || !last.started || last.clean) return;
   const mins = Math.max(1, Math.round((last.at - last.started) / 60000));
-  $("crash-text").textContent = "After " + mins + " min on the " + ((ENGINES[last.engine] || ["Fast"])[0]) + " engine, " + last.phase +
+  $("crash-text").textContent = "After " + mins + " min on the " + ((ENGINES[last.engine] || [last.engine === "st" ? "Standard" : "Fast (original)"])[0]) + " engine, " + last.phase +
     ". Memory " + last.wasmMB + " MB · compiled code since last clear-out " + (last.jitLiveMB || 0) + " MB of " + (last.jitTotalMB || 0) + " MB made" + (last.groups ? " in " + last.groups + " modules" : "") +
     " · recycle at " + (last.cap ? last.cap + " MB" : "off") + " (" + (last.flushes || 0) + " clear-outs)" +
      " · " + last.mips + " MIPS at the end. Logged " + new Date(last.at).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) + ".";
