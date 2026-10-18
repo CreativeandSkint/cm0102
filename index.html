@@ -108,6 +108,9 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
 #tools #t-handle { display: none; }
 /* Leave a lane on the right for the tool rail so it never covers the game (11" iPads in full screen). */
 #dropzone { padding-right: calc(68px + env(safe-area-inset-right, 0px)); box-sizing: border-box; }
+/* Keep the game clear of the iPad's status bar (clock, battery) at the top and the home bar at the bottom,
+   so CM's top-right buttons aren't sitting under the battery icon where taps don't reach the game. */
+#dropzone { padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
 /* Screens too square for a side rail (13" iPads): the tools fold behind a small tab on the right edge. */
 @media (max-aspect-ratio: 1.42/1) {
   #dropzone { padding-right: 0; }
