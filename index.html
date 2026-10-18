@@ -182,6 +182,7 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
         </div>
         <div class="section" id="device-saves-card" hidden>
           <h2>Saves on this iPad</h2>
+          <p class="fine">Send gives you the file to keep in Files, AirDrop to a mate, or back up. Your mate brings it in below.</p>
           <div class="saves" id="device-saves"></div>
         </div>
         <div class="section" id="savelog-card" hidden>
@@ -191,12 +192,12 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
           </details>
         </div>
         <div class="section">
-          <h2>Bring in a save</h2>
+          <h2>Bring in a save or tactic</h2>
           <div class="row">
-            <div class="label"><b>From Files</b><span>A .sav from your Mac (AirDrop it to the iPad first).</span></div>
+            <div class="label"><b>From Files</b><span>A save (.sav) or tactic (.tct), or a zip of them. AirDrop them to the iPad first.</span></div>
             <button class="btn" type="button" id="l-import">Choose file</button>
           </div>
-          <input type="file" id="l-file" accept=".sav,.zip,application/zip,application/octet-stream" multiple hidden>
+          <input type="file" id="l-file" accept=".sav,.tct,.zip,application/zip,application/octet-stream" multiple hidden>
           <div class="status" id="l-status"></div>
           <div class="saves" id="pending"></div>
         </div>
@@ -364,7 +365,7 @@ async function renderPending() {
   for (const { name, blob, overwrite } of list) {
     const row = document.createElement("div"); row.className = "row";
     const lab = document.createElement("div"); lab.className = "label";
-    const b = document.createElement("b"); b.textContent = name.replace(/\.sav$/i, "");
+    const b = document.createElement("b"); b.textContent = name.replace(/\.(sav|tct)$/i, "") + (/\.tct$/i.test(name) ? " (tactic)" : "");
     const sp = document.createElement("span"); sp.textContent = fmtMB(blob.size) + (overwrite ? " · replaces the save in the game when you kick off" : " · goes into the game when you kick off");
     lab.append(b, sp);
     const x = document.createElement("button"); x.type = "button"; x.className = "btn"; x.textContent = "Remove";
@@ -380,9 +381,9 @@ async function savesFromFile(f) {
   if (/\.zip$/i.test(f.name)) {
     const z = await fflate(); const buf = new Uint8Array(await f.arrayBuffer());
     const out = await new Promise((res, rej) => z.unzip(buf, (err, o) => err ? rej(err) : res(o)));
-    return Object.entries(out).filter(([n]) => /\.sav$/i.test(n)).map(([n, bytes]) => ({ name: n.split("/").pop(), blob: new Blob([bytes]) }));
+    return Object.entries(out).filter(([n]) => /\.(sav|tct)$/i.test(n) && !/(^|\/)__MACOSX\//.test(n)).map(([n, bytes]) => ({ name: n.split("/").pop(), blob: new Blob([bytes]) }));
   }
-  if (/\.sav$/i.test(f.name)) return [{ name: f.name, blob: f }];
+  if (/\.(sav|tct)$/i.test(f.name)) return [{ name: f.name, blob: f }];
   return [];
 }
 $("l-import").onclick = () => $("l-file").click();
@@ -392,7 +393,7 @@ $("l-file").onchange = async e => {
   try {
     let n = 0;
     for (const f of files) for (const s of await savesFromFile(f)) { await pendingPut(s.name, s.blob); n++; }
-    $("l-status").textContent = n ? "Added. It'll be in Restore Saved Game after you kick off." : "No .sav files found in that.";
+    $("l-status").textContent = n ? "Added. Saves appear in Restore Saved Game and tactics under Tactics, Load, after you kick off." : "No .sav or .tct files found in that.";
     renderPending();
   } catch (err) { $("l-status").textContent = "Couldn't add that file: " + (err.message || err); }
 };
@@ -455,6 +456,27 @@ refreshStatus();
 })();
 
 
+// Hand a save or tactic out of the app: the share sheet on iPad (Save to Files,
+// AirDrop, WhatsApp), a download elsewhere. Read straight from storage, so it
+// works from the launcher without starting the game.
+async function sendStoredFile(f, btn) {
+  const label = btn.textContent; btn.disabled = true; btn.textContent = "Getting it…";
+  try {
+    const db = await new Promise((res, rej) => { const r = indexedDB.open("/root/app/cm0102.zip"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+    const rec = await new Promise(res => { const q = db.transaction("FILE_DATA").objectStore("FILE_DATA").get(f.path); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); });
+    db.close();
+    if (!rec || !rec.contents) throw new Error("couldn't read it from storage");
+    const file = new File([rec.contents], f.file, { type: "application/octet-stream" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: f.file });
+    } else {
+      const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = f.file; document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 60000);
+    }
+  } catch (e) { if (!(e && e.name === "AbortError")) alertLine("Couldn't send " + f.file + ": " + (e.message || e)); }
+  btn.disabled = false; btn.textContent = label;
+}
+function alertLine(msg) { const st = $("l-status"); if (st) st.textContent = msg; }
 (async function listDeviceSaves() {
   try {
     const dbs = indexedDB.databases ? await indexedDB.databases() : [{ name: "/root/app/cm0102.zip" }];
@@ -467,19 +489,23 @@ refreshStatus();
       const src = store.indexNames.contains("timestamp") ? store.index("timestamp") : null;
       if (!src) return res();
       const c = src.openKeyCursor();
-      c.onsuccess = () => { const cur = c.result; if (!cur) return res(); const path = String(cur.primaryKey); if (/drive_c\/files\/[^/]+\.sav$/i.test(path)) found.push({ name: path.split("/").pop().replace(/\.sav$/i, ""), at: new Date(cur.key) }); cur.continue(); };
+      c.onsuccess = () => { const cur = c.result; if (!cur) return res(); const path = String(cur.primaryKey); if ((/drive_c\/files\/[^/]+\.sav$/i.test(path) || /drive_c\/.*\/tactics\/[^/]+\.tct$/i.test(path)) && !/\/temp_save/i.test(path)) found.push({ path, file: path.split("/").pop(), name: path.split("/").pop().replace(/\.(sav|tct)$/i, ""), tactic: /\.tct$/i.test(path), at: new Date(cur.key) }); cur.continue(); };
       c.onerror = () => res();
     });
     db.close();
     if (!found.length) return;
-    found.sort((a, b) => b.at - a.at);
+    found.sort((a, b) => (a.tactic - b.tactic) || (b.at - a.at));
+    // The same tactic sits in several folders: keep the newest copy of each.
+    for (let i = found.length - 1; i >= 0; i--) if (found[i].tactic && found.findIndex(f => f.tactic && f.file.toLowerCase() === found[i].file.toLowerCase()) < i) found.splice(i, 1);
     const wrap = $("device-saves"); wrap.textContent = "";
     for (const f of found) {
       const row = document.createElement("div"); row.className = "row";
       const lab = document.createElement("div"); lab.className = "label";
-      const b = document.createElement("b"); b.textContent = f.name;
-      const sp = document.createElement("span"); sp.textContent = "Last saved " + f.at.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
-      lab.append(b, sp); row.append(lab); wrap.append(row);
+      const b = document.createElement("b"); b.textContent = f.name + (f.tactic ? " (tactic)" : "");
+      const sp = document.createElement("span"); sp.textContent = (f.tactic ? "Tactic saved " : "Last saved ") + f.at.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      const send = document.createElement("button"); send.type = "button"; send.className = "btn"; send.textContent = "Send";
+      send.onclick = () => sendStoredFile(f, send);
+      lab.append(b, sp); row.append(lab, send); wrap.append(row);
     }
     $("device-saves-card").hidden = false;
   } catch (e) { console.warn("listDeviceSaves", e); }
@@ -508,14 +534,38 @@ $("kick").onclick = async () => {
 
 /* ===== Writing saves into the game folder ===== */
 function ensureDir(p) { try { FS.mkdirTree(p); } catch (e) {} }
+// CM remembers the tactics folder of the PC a save came from (usually under
+// Program Files), so tactics go in every usual spot, and those folders always
+// exist so saving a tactic in the game works too.
+function tacticDirs() {
+  const c = ROOT + "/home/username/.wine/drive_c";
+  return [gameDir() + "/tactics", c + "/Program Files (x86)/Championship Manager 01-02/tactics", c + "/Program Files/Championship Manager 01-02/tactics"];
+}
+function ensureTacticDirs() { for (const d of tacticDirs()) ensureDir(d); }
 function persist() { return syncNow("import"); }
-let installedNow = "", recoveredNow = [];
+let installedNow = "", installedTactics = "", recoveredNow = [];
 async function installPendingSaves() {
+  try { ensureTacticDirs(); } catch (e) {}
   if (!pendingSaves.length) return;
   ensureDir(gameDir());
   const names = [];
   const exists = n => { try { FS.stat(gameDir() + "/" + n); return true; } catch (e) { return false; } };
+  const tactics = [];
   for (const { name, blob, overwrite } of pendingSaves) {
+    // Tactics live in the game's tactics folder.
+    if (/\.tct$/i.test(name)) {
+      try {
+        ensureTacticDirs();
+        const there = t => tacticDirs().some(d => { try { FS.stat(d + "/" + t); return true; } catch (e) { return false; } });
+        let target = name;
+        const base = name.replace(/\.tct$/i, "");
+        for (let i = 1; there(target); i++) target = base + " (imported" + (i > 1 ? " " + i : "") + ").tct";
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        for (const d of tacticDirs()) FS.writeFile(d + "/" + target, bytes);
+        tactics.push(target.replace(/\.tct$/i, ""));
+      } catch (e) { console.warn(e); }
+      continue;
+    }
     try {
       // Never let an import replace a save the game has already written,
       // unless this is a deliberate restore of a safety copy.
@@ -532,6 +582,7 @@ async function installPendingSaves() {
   await pendingClear();
   pendingSaves.length = 0;
   installedNow = names.join(" and ");
+  installedTactics = tactics.join(", ");
 }
 
 /* ===== Home: back to the launcher =====
@@ -637,6 +688,7 @@ function onWindowShown() {
   setTimeout(() => { $("boot").hidden = true; clearInterval(bootTimer); }, 6000);
   $("tools").hidden = false;
   if (installedNow) setTimeout(() => toast(installedNow + " is ready under Restore Saved Game", 4500), 7000);
+  if (installedTactics) setTimeout(() => toast("New tactics ready under Tactics, Load: " + installedTactics, 5000), installedNow ? 12500 : 7000);
   if (rescuedNow.length) setTimeout(() => toast("Found and restored your lost " + rescuedNow.join(" and ") + " save", 6000), 9000);
   if (recoveredNow.length) setTimeout(() => toast("Restored your latest " + recoveredNow.join(" and ") + " save", 5000), 12000);
   watchSaves();
@@ -927,7 +979,7 @@ window.addEventListener("pagehide", () => { if (gameShown) syncNow("app closed")
 const SETTLE_MS = 160, HOLD_MS = 100;
 (function touchInput() {
   const zone = $("dropzone");
-  let rightNext = false, start = null, dragging = false, holdTimer = 0, lastPinch = null, consumed = false;
+  let rightNext = false, start = null, dragging = false, dragBtn = 0, rdrag = false, holdTimer = 0, lastPinch = null, consumed = false;
   const target = () => $("canvas");
   function send(type, x, y, button, buttons) {
     const ev = new MouseEvent(type, { clientX: x, clientY: y, screenX: x, screenY: y, button, buttons, bubbles: true, cancelable: true, view: window });
@@ -950,20 +1002,30 @@ const SETTLE_MS = 160, HOLD_MS = 100;
   const opts = { capture: true, passive: false };
   zone.addEventListener("touchstart", e => {
     e.preventDefault(); e.stopPropagation();
-    if (e.touches.length === 2) { clearTimeout(holdTimer); const a = e.touches[0], b = e.touches[1]; lastPinch = (a.clientY + b.clientY) / 2; consumed = true; if (dragging) { send("mouseup", start.x, start.y, 0, 0); dragging = false; } return; }
+    if (e.touches.length === 2) { clearTimeout(holdTimer); const a = e.touches[0], b = e.touches[1]; lastPinch = (a.clientY + b.clientY) / 2; consumed = true; if (dragging || rdrag) { send("mouseup", start.x, start.y, rdrag ? 2 : dragBtn, 0); dragging = false; rdrag = false; } return; }
     if (e.touches.length > 2) return;
-    const t = e.changedTouches[0]; start = { x: t.clientX, y: t.clientY, time: Date.now() }; dragging = false; consumed = false;
+    const t = e.changedTouches[0]; start = { x: t.clientX, y: t.clientY, time: Date.now() }; dragging = false; rdrag = false; consumed = false;
     moveTo(t.clientX, t.clientY);
     clearTimeout(holdTimer);
-    holdTimer = setTimeout(() => { if (!dragging && !consumed && start) { consumed = true; click(start.x, start.y, 2); toast("Right-click", 900); } }, 650);
+    // Press and hold: the right button goes down and stays down until you lift,
+    // so you can drag with it (CM's tactics arrows) or just let go for a right-click.
+    holdTimer = setTimeout(() => { if (!dragging && !consumed && start) { consumed = true; rdrag = true; send("mousedown", start.x, start.y, 2, 2); toast("Right button held. Drag for a run, or lift.", 1600); } }, 650);
   }, opts);
   zone.addEventListener("touchmove", e => {
     e.preventDefault(); e.stopPropagation();
     if (e.touches.length === 2 && lastPinch !== null) { const a = e.touches[0], b = e.touches[1]; const y = (a.clientY + b.clientY) / 2; const dy = lastPinch - y; if (Math.abs(dy) > 12) { wheel(dy > 0 ? 100 : -100, a.clientX, y); lastPinch = y; } return; }
-    if (!start || consumed) return;
+    if (!start) return;
     const t = e.changedTouches[0];
-    if (!dragging && Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10) { dragging = true; clearTimeout(holdTimer); send("mousedown", start.x, start.y, 0, 1); }
-    if (dragging) send("mousemove", t.clientX, t.clientY, 0, 1);
+    if (rdrag) { send("mousemove", t.clientX, t.clientY, 0, 2); return; }
+    if (consumed) return;
+    if (!dragging && Math.hypot(t.clientX - start.x, t.clientY - start.y) > 10) {
+      dragging = true; clearTimeout(holdTimer);
+      // With Right switched on, the drag uses the right button.
+      dragBtn = rightNext ? 2 : 0;
+      if (rightNext) { rightNext = false; $("t-rc").setAttribute("aria-pressed", "false"); }
+      send("mousedown", start.x, start.y, dragBtn, dragBtn === 2 ? 2 : 1);
+    }
+    if (dragging) send("mousemove", t.clientX, t.clientY, 0, dragBtn === 2 ? 2 : 1);
   }, opts);
   const end = e => {
     e.preventDefault(); e.stopPropagation();
@@ -971,9 +1033,10 @@ const SETTLE_MS = 160, HOLD_MS = 100;
     clearTimeout(holdTimer);
     if (!start) return;
     const t = e.changedTouches[0];
-    if (dragging) send("mouseup", t.clientX, t.clientY, 0, 0);
+    if (rdrag) send("mouseup", t.clientX, t.clientY, 2, 0);
+    else if (dragging) send("mouseup", t.clientX, t.clientY, dragBtn, 0);
     else if (!consumed) { if (rightNext) { click(t.clientX, t.clientY, 2); rightNext = false; $("t-rc").setAttribute("aria-pressed", "false"); } else click(t.clientX, t.clientY, 0); }
-    start = null; dragging = false;
+    start = null; dragging = false; rdrag = false;
   };
   zone.addEventListener("touchend", end, opts);
   zone.addEventListener("touchcancel", end, opts);
