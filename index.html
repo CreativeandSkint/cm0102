@@ -106,8 +106,11 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
 #tools button[aria-pressed="true"] { background: var(--yellow); color: #1b1600; }
 #tools .mips { font-family: var(--display); font-size: 11px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; line-height: 1.2; }
 #tools #t-handle { display: none; }
+/* Leave a lane on the right for the tool rail so it never covers the game (11" iPads in full screen). */
+#dropzone { padding-right: calc(68px + env(safe-area-inset-right, 0px)); box-sizing: border-box; }
 /* Screens too square for a side rail (13" iPads): the tools fold behind a small tab on the right edge. */
 @media (max-aspect-ratio: 1.42/1) {
+  #dropzone { padding-right: 0; }
   #tools { right: 0; padding-right: env(safe-area-inset-right, 0px); }
   #tools #t-handle { display: grid; width: 22px !important; min-height: 64px !important; padding: 0 !important; border-right: 0 !important; opacity: .8; font-size: 16px !important; }
   #tools:not(.open) > :not(#t-handle) { display: none; }
@@ -921,7 +924,7 @@ window.addEventListener("pagehide", () => { if (gameShown) syncNow("app closed")
 
 
 /* ===== Touch, keyboard ===== */
-const SETTLE_MS = 320, HOLD_MS = 200;
+const SETTLE_MS = 160, HOLD_MS = 100;
 (function touchInput() {
   const zone = $("dropzone");
   let rightNext = false, start = null, dragging = false, holdTimer = 0, lastPinch = null, consumed = false;
@@ -989,18 +992,32 @@ const SETTLE_MS = 320, HOLD_MS = 200;
     if (/^[0-9]$/.test(ch)) return "Digit" + ch;
     return PUNCT[ch] || null;
   }
-  function fire(type, code, key) { window.dispatchEvent(new KeyboardEvent(type, { code, key, bubbles: true, cancelable: true })); }
+  function fire(type, code, key, shift) { window.dispatchEvent(new KeyboardEvent(type, { code, key, shiftKey: !!shift, bubbles: true, cancelable: true })); }
+  // The game reads Shift a moment after the key arrives, so each step is spaced
+  // out and queued; otherwise capitals come through as lower case.
+  const STEP = 40;
+  let keyChain = Promise.resolve();
+  const later = ms => new Promise(r => setTimeout(r, ms));
   function press(code, key, shift) {
-    if (shift) fire("keydown", "ShiftLeft", "Shift");
-    fire("keydown", code, key); fire("keyup", code, key);
-    if (shift) fire("keyup", "ShiftLeft", "Shift");
+    keyChain = keyChain.then(async () => {
+      if (shift) { fire("keydown", "ShiftLeft", "Shift", true); await later(STEP); }
+      fire("keydown", code, key, shift); await later(STEP);
+      fire("keyup", code, key, shift); await later(STEP);
+      if (shift) { fire("keyup", "ShiftLeft", "Shift", false); await later(STEP); }
+    });
   }
   // Hardware keyboard while the field has focus: forward the real keys.
   for (const type of ["keydown", "keyup"]) {
     inp.addEventListener(type, e => {
       if (!e.code || e.key === "Unidentified" || e.keyCode === 229) return;
       e.preventDefault(); e.stopPropagation();
-      fire(type, e.code, e.key);
+      if (e.code === "CapsLock") return;
+      // Caps Lock on a hardware keyboard: send the letter as Shift + letter.
+      if (/^Key[A-Z]$/.test(e.code) && !e.shiftKey && e.key.length === 1 && e.key !== e.key.toLowerCase()) {
+        if (type === "keydown") press(e.code, e.key, true);
+        return;
+      }
+      fire(type, e.code, e.key, e.shiftKey);
       if (type === "keydown" && e.code === "Escape") inp.blur();
     });
   }
