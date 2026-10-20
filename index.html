@@ -202,17 +202,24 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
           <div class="saves" id="pending"></div>
         </div>
         <div class="section">
-          <h2>Database or version <span style="opacity:.6">(test)</span></h2>
+          <h2>Game version</h2>
           <div class="row">
-            <div class="label"><b id="db-name">Built-in database</b><span id="db-note">The one this app comes with.</span></div>
+            <div class="label"><b id="ver-name">3.9.60</b><span id="ver-note">The version this app comes with, with its database.</span></div>
+            <div class="seg" role="group" aria-label="Game version">
+              <button type="button" id="ver-3960" aria-pressed="true">3.9.60</button>
+              <button type="button" id="ver-3968" aria-pressed="false">3.9.68</button>
+            </div>
+          </div>
+          <div class="row">
+            <div class="label"><b id="db-name">Database: the version's own</b><span id="db-note">Bring in a different one if you have it.</span></div>
             <button class="btn" type="button" id="db-import">Bring in a database</button>
           </div>
           <div class="row" id="db-reset-row" hidden>
-            <div class="label"><span>Go back to the database the app came with.</span></div>
-            <button class="btn" type="button" id="db-reset">Back to the original</button>
+            <div class="label"><span>Drop the database you brought in.</span></div>
+            <button class="btn" type="button" id="db-reset">Remove it</button>
           </div>
           <input type="file" id="db-file" accept=".zip,application/zip" hidden>
-          <p class="fine">A zip of a CM 01/02 Data folder, or a patched game (such as 3.9.68) with its .exe files. New games use it; a save keeps the database it was started with, and saves may not load across versions. Takes effect when you kick off.</p>
+          <p class="fine">3.9.68 is SI's final official patch, with their 02/03 data. A database is a zip of a CM 01/02 Data folder. New games use them; a save keeps the database it started with, and saves don't load across versions. Changes take effect when you kick off.</p>
           <div class="status" id="db-status"></div>
         </div>
       </div>
@@ -412,84 +419,108 @@ $("l-file").onchange = async e => {
   } catch (err) { $("l-status").textContent = "Couldn't add that file: " + (err.message || err); }
 };
 
-/* ===== Custom database (test) =====
-   A database update is a set of files for the game's Data folder. The game's own
-   Data files live inside the packed game; a real file at the same path takes
-   priority, so an imported database is written over them at kick off, and
-   removed again to go back. The choice waits in IndexedDB until then. */
-const DB_KEY = "cm-db-active";   // { name, at, files: [relative names] } once applied
+/* ===== Game version and custom database =====
+   A version (3.9.68) or a database is a set of files laid over the packed game:
+   a real file at the same path takes priority over the packed one. The wanted
+   setup is kept here; at kick off, if it changed, everything laid over before is
+   removed and the new set is written. 3.9.68 comes from this site (cached for
+   offline once fetched); a custom database waits in IndexedDB. */
+const V3968_URL = "data/cm0102-3.9.68.zip";
+const APPLIED_KEY = "cm-db-active";     // { files: [...], version, custom } as laid over now
+const WANT_VER_KEY = "cm-version";      // "3.9.68" or absent
+const DIRTY_KEY = "cm-db-dirty";
 let dbStoreP = null;
 function dbStore() { return dbStoreP || (dbStoreP = new Promise(res => { try { const r = indexedDB.open("cm0102-database", 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch (e) { res(null); } })); }
 async function dbGet(k) { const db = await dbStore(); if (!db) return null; return new Promise(res => { const q = db.transaction("kv").objectStore("kv").get(k); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); }
 async function dbPut(k, v) { const db = await dbStore(); if (!db) throw new Error("This browser won't store files"); return new Promise((res, rej) => { const tx = db.transaction("kv", "readwrite"); v === null ? tx.objectStore("kv").delete(k) : tx.objectStore("kv").put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
-function dbActive() { try { return JSON.parse(ls.get(DB_KEY, "null")); } catch (e) { return null; } }
-async function renderDb() {
-  const act = dbActive(), pend = await dbGet("pending");
-  const day = t => new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-  if (pend && pend.action === "set") { $("db-name").textContent = pend.name; $("db-note").textContent = pend.count + " files · goes in when you kick off"; }
-  else if (pend && pend.action === "reset") { $("db-name").textContent = "Built-in database"; $("db-note").textContent = "Switches back when you kick off"; }
-  else if (act) { $("db-name").textContent = act.name; $("db-note").textContent = (act.version ? "Game version " + act.version + " · " : "") + act.files.length + " files · brought in " + day(act.at); }
-  else { $("db-name").textContent = "Built-in database"; $("db-note").textContent = "The one this app comes with."; }
-  $("db-reset-row").hidden = !((act && !(pend && pend.action === "reset")) || (pend && pend.action === "set"));
+function applied() { try { return JSON.parse(ls.get(APPLIED_KEY, "null")); } catch (e) { return null; } }
+function wantVersion() { return ls.get(WANT_VER_KEY, "3.9.60"); }
+function markDirty() { ls.set(DIRTY_KEY, "1"); }
+// Pick the game files out of a zip: Data folder, game programs, Hall of Fame.
+async function gameFilesFromZip(buf) {
+  const z = await fflate();
+  const all = await new Promise((res, rej) => z.unzip(buf, (err, o) => err ? rej(err) : res(o)));
+  const files = {};
+  for (const [path, bytes] of Object.entries(all)) {
+    if (path.endsWith("/") || /(^|\/)__MACOSX\//.test(path) || /(^|\/)\.DS_Store$/.test(path)) continue;
+    const base = path.split("/").pop();
+    if (/^cm0102(_gdi)?\.exe$/i.test(base)) { files[/gdi/i.test(base) ? "cm0102_GDI.exe" : "cm0102.exe"] = new Blob([bytes]); continue; }
+    if (/^hall_of_fame\.bin$/i.test(base) && !/(^|\/)data\//i.test(path)) { files["hall_of_fame.bin"] = new Blob([bytes]); continue; }
+    const m = /(?:^|\/)data\/(.+)$/i.exec(path);
+    const rel = m ? m[1] : (!path.includes("/") && /\.(dat|cfg|lng|pct|mbr|rgn|fnt|t2k)$/i.test(path) ? path : null);
+    if (rel && !rel.includes("/")) files["Data/" + rel] = new Blob([bytes]);
+  }
+  return files;
 }
-renderDb();
-// The version badge on the launcher follows whatever game program is in use.
-(function showVersion() { const act = dbActive(); if (act && act.version) { const v = document.querySelector(".rail .ver b"); if (v) v.textContent = act.version === "patched" ? "Patched" : act.version; } })();
+async function renderDb() {
+  const v = wantVersion(), custom = await dbGet("custom"), dirty = ls.get(DIRTY_KEY, "") === "1";
+  $("ver-3960").setAttribute("aria-pressed", v !== "3.9.68");
+  $("ver-3968").setAttribute("aria-pressed", v === "3.9.68");
+  $("ver-name").textContent = v;
+  $("ver-note").textContent = (v === "3.9.68" ? "SI's final official patch, with their 02/03 data." : "The version this app comes with, with its database.") + (dirty ? " Switches when you kick off." : "");
+  $("db-name").textContent = custom ? "Database: " + custom.name : "Database: the version's own";
+  $("db-note").textContent = custom ? Object.keys(custom.files).length + " files" + (dirty ? " · goes in when you kick off" : " · in use for new games") : "Bring in a different one if you have it.";
+  $("db-reset-row").hidden = !custom;
+  const a = applied(); const badge = document.querySelector(".rail .ver b");
+  if (badge) badge.textContent = (a && a.version) || "3.9.60";
+}
+// Older test builds kept the import under "pending": carry it over as the custom database.
+(async () => { try { const old = await dbGet("pending"); if (old) { if (old.action === "set" && old.files) { const files = {}; for (const [k, b] of Object.entries(old.files)) files[k.includes("/") || /\.(exe|bin)$/i.test(k) ? k : "Data/" + k] = b; await dbPut("custom", { name: old.name, files }); } await dbPut("pending", null); markDirty(); } } catch (e) {} renderDb(); })();
+async function chooseVersion(v) {
+  if (v === wantVersion()) return;
+  if (v === "3.9.68") {
+    $("db-status").textContent = "Downloading 3.9.68 (18 MB)…";
+    try { const r = await fetch(V3968_URL); if (!r.ok) throw new Error("download failed (" + r.status + ")"); await r.arrayBuffer(); }
+    catch (e) { $("db-status").textContent = "Couldn't get 3.9.68: " + (e.message || e) + ". Try again when you're online."; return; }
+    $("db-status").textContent = "3.9.68 is on this iPad. It switches when you kick off. Start a new game to use it.";
+    ls.set(WANT_VER_KEY, "3.9.68");
+  } else {
+    try { localStorage.removeItem(WANT_VER_KEY); } catch (e) {}
+    $("db-status").textContent = "Back to 3.9.60 when you kick off.";
+  }
+  markDirty(); renderDb();
+}
+$("ver-3960").onclick = () => chooseVersion("3.9.60");
+$("ver-3968").onclick = () => chooseVersion("3.9.68");
 $("db-import").onclick = () => $("db-file").click();
 $("db-file").onchange = async e => {
   const f = e.target.files[0]; e.target.value = ""; if (!f) return;
   $("db-status").textContent = "Reading…";
   try {
-    const z = await fflate(); const buf = new Uint8Array(await f.arrayBuffer());
-    const all = await new Promise((res, rej) => z.unzip(buf, (err, o) => err ? rej(err) : res(o)));
-    const files = {};
-    for (const [path, bytes] of Object.entries(all)) {
-      if (path.endsWith("/") || /(^|\/)__MACOSX\//.test(path) || /(^|\/)\.DS_Store$/.test(path)) continue;
-      const base = path.split("/").pop();
-      // The game programs (a patched version such as 3.9.68) sit in the game folder itself.
-      if (/^cm0102(_gdi)?\.exe$/i.test(base)) { files[/gdi/i.test(base) ? "cm0102_GDI.exe" : "cm0102.exe"] = new Blob([bytes]); continue; }
-      if (/^hall_of_fame\.bin$/i.test(base) && !/(^|\/)data\//i.test(path)) { files["hall_of_fame.bin"] = new Blob([bytes]); continue; }
-      const m = /(?:^|\/)data\/(.+)$/i.exec(path);
-      const rel = m ? m[1] : (!path.includes("/") && /\.(dat|cfg|lng|pct|mbr|rgn|fnt|t2k)$/i.test(path) ? path : null);
-      if (rel && !rel.includes("/")) files["Data/" + rel] = new Blob([bytes]);
-    }
+    const files = await gameFilesFromZip(new Uint8Array(await f.arrayBuffer()));
     const n = Object.keys(files).length;
-    if (!n || !Object.keys(files).some(k => /\.(dat|exe)$/i.test(k))) { $("db-status").textContent = "That zip doesn't look like CM 01/02 (no Data folder with .dat files, and no game program)."; return; }
-    await dbPut("pending", { action: "set", name: f.name.replace(/\.zip$/i, ""), count: n, files });
+    if (!n || !Object.keys(files).some(k => /\.(dat|exe)$/i.test(k))) { $("db-status").textContent = "That zip doesn't look like CM 01/02 (no Data folder with .dat files)."; return; }
+    await dbPut("custom", { name: f.name.replace(/\.zip$/i, ""), files });
+    markDirty();
     $("db-status").textContent = "Got " + n + " files. They go in when you kick off. Start a new game to use them.";
     renderDb();
   } catch (err) { $("db-status").textContent = "Couldn't read that zip: " + (err.message || err); }
 };
-$("db-reset").onclick = async () => {
-  const pend = await dbGet("pending");
-  if (pend && pend.action === "set" && !dbActive()) await dbPut("pending", null);
-  else await dbPut("pending", { action: "reset" });
-  $("db-status").textContent = "The original database comes back when you kick off.";
-  renderDb();
-};
+$("db-reset").onclick = async () => { await dbPut("custom", null); markDirty(); $("db-status").textContent = "Removed. The version's own database comes back when you kick off."; renderDb(); };
 // Called at kick off, before Windows starts.
 async function applyDatabase() {
-  const pend = await dbGet("pending"); if (!pend) return;
+  if (ls.get(DIRTY_KEY, "") !== "1") return;
   const g = gameDir();
   const full = n => g + "/" + (n.includes("/") || /\.(exe|bin)$/i.test(n) ? n : "Data/" + n);
-  const act = dbActive();
-  // Take out whatever an earlier import put in, so the packed files show again.
-  if (act) for (const n of act.files) { try { FS.unlink(full(n)); } catch (e) {} }
-  if (pend.action === "set") {
-    ensureDir(g + "/Data");
-    const names = [];
-    for (const [n, blob] of Object.entries(pend.files)) { FS.writeFile(full(n), new Uint8Array(await blob.arrayBuffer())); names.push(n); }
-    const gdi = pend.files["cm0102_GDI.exe"];
-    ls.set(DB_KEY, JSON.stringify({ name: pend.name, at: Date.now(), files: names, version: gdi ? (gdi.size === 7188480 ? "3.9.68" : "patched") : "" }));
-    saveLog("database: brought in " + pend.name + " (" + names.length + " files)");
-    dbNow = pend.name;
-  } else {
-    try { localStorage.removeItem(DB_KEY); } catch (e) {}
-    saveLog("database: back to the built-in one");
-    dbNow = "the original";
+  const before = applied();
+  const files = {}; let version = "";
+  if (wantVersion() === "3.9.68") {
+    const r = await fetch(V3968_URL); if (!r.ok) throw new Error("3.9.68 files missing (" + r.status + ")");
+    Object.assign(files, await gameFilesFromZip(new Uint8Array(await r.arrayBuffer())));
+    version = "3.9.68";
   }
+  const custom = await dbGet("custom");
+  if (custom) Object.assign(files, custom.files);
+  // Take out whatever was laid over before, so the packed files show again.
+  if (before) for (const n of before.files) { try { FS.unlink(full(n)); } catch (e) {} }
+  ensureDir(g + "/Data");
+  const names = [];
+  for (const [n, blob] of Object.entries(files)) { FS.writeFile(full(n), new Uint8Array(await blob.arrayBuffer())); names.push(n); }
+  ls.set(APPLIED_KEY, JSON.stringify({ files: names, version: version || (files["cm0102_GDI.exe"] ? "patched" : ""), custom: custom ? custom.name : "" }));
+  try { localStorage.removeItem(DIRTY_KEY); } catch (e) {}
+  saveLog("game files: " + (version || "3.9.60") + (custom ? " + database " + custom.name : "") + " (" + names.length + " files laid over)");
+  dbNow = (version || "3.9.60") + (custom ? " with " + custom.name : "");
   await syncNow("database");
-  await dbPut("pending", null);
 }
 let dbNow = "";
 
@@ -783,7 +814,7 @@ function onWindowShown() {
   setTimeout(() => { $("boot").hidden = true; clearInterval(bootTimer); }, 6000);
   $("tools").hidden = false;
   if (installedNow) setTimeout(() => toast(installedNow + " is ready under Restore Saved Game", 4500), 7000);
-  if (dbNow) setTimeout(() => toast("Now using " + dbNow + " database for new games", 5000), 4000);
+  if (dbNow) setTimeout(() => toast("Now on " + dbNow + ". Start a new game to use it.", 5000), 4000);
   if (installedTactics) setTimeout(() => toast("New tactics ready under Tactics, Load: " + installedTactics, 5000), installedNow ? 12500 : 7000);
   if (rescuedNow.length) setTimeout(() => toast("Found and restored your lost " + rescuedNow.join(" and ") + " save", 6000), 9000);
   if (recoveredNow.length) setTimeout(() => toast("Restored your latest " + recoveredNow.join(" and ") + " save", 5000), 12000);
