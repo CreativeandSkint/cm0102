@@ -219,7 +219,7 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
             <button class="btn" type="button" id="db-reset">Remove it</button>
           </div>
           <input type="file" id="db-file" accept=".zip,application/zip" hidden>
-          <p class="fine">3.9.68 is SI's final official patch, with their 02/03 data. A database is a zip of a CM 01/02 Data folder. New games use them; a save keeps the database it started with, and saves don't load across versions. Changes take effect when you kick off.</p>
+          <p class="fine">3.9.68 is SI's final official patch, with their 02/03 data. A database is a zip of a CM 01/02 Data folder, plus cm0102.exe if your game is patched. New games use them; a save keeps the database it started with, and saves don't load across versions. Changes take effect when you kick off.</p>
           <div class="status" id="db-status"></div>
         </div>
       </div>
@@ -516,7 +516,10 @@ async function applyDatabase() {
   ensureDir(g + "/Data");
   const names = [];
   for (const [n, blob] of Object.entries(files)) { FS.writeFile(full(n), new Uint8Array(await blob.arrayBuffer())); names.push(n); }
-  ls.set(APPLIED_KEY, JSON.stringify({ files: names, version: version || (files["cm0102_GDI.exe"] ? "patched" : ""), custom: custom ? custom.name : "" }));
+  // A brought-in game program is usually patched (e.g. by the CM 01/02 patcher), and on
+  // a PC that's cm0102.exe, the one the desktop shortcut runs; so run that one.
+  const runExe = custom && custom.files["cm0102.exe"] ? "cm0102.exe" : "";
+  ls.set(APPLIED_KEY, JSON.stringify({ files: names, version: version || (custom && (custom.files["cm0102.exe"] || custom.files["cm0102_GDI.exe"]) ? "patched" : ""), custom: custom ? custom.name : "", runExe }));
   try { localStorage.removeItem(DIRTY_KEY); } catch (e) {}
   saveLog("game files: " + (version || "3.9.60") + (custom ? " + database " + custom.name : "") + " (" + names.length + " files laid over)");
   dbNow = (version || "3.9.60") + (custom ? " with " + custom.name : "");
@@ -771,7 +774,9 @@ function startEngine() {
   bootTimer = setInterval(() => { const s = Math.floor((Date.now() - bootStart) / 1000); $("boot-time").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") + " · " + ENGINES[engine][0] + " engine" + (lastMips ? " · " + lastMips + " MIPS" : ""); }, 1000);
   const shell = document.createElement("script"); shell.src = "shell.js";
   shell.onload = () => {
-    Config.urlParams = "app=cm0102&p=cm0102_GDI.exe&sound=false&resolution=800x600&root=boxedwine";
+    // Normally the GDI build; a brought-in patched game may only patch cm0102.exe, so run that one then.
+    const runExe = (applied() && applied().runExe) || "cm0102_GDI.exe";
+    Config.urlParams = "app=cm0102&p=" + runExe + "&sound=false&resolution=800x600&root=boxedwine";
     // Quiet console: parse what we need, keep nothing.
     const watch = text => {
       text = String(text);
