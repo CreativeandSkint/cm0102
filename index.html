@@ -202,7 +202,7 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
           <div class="saves" id="pending"></div>
         </div>
         <div class="section">
-          <h2>Database <span style="opacity:.6">(test)</span></h2>
+          <h2>Database or version <span style="opacity:.6">(test)</span></h2>
           <div class="row">
             <div class="label"><b id="db-name">Built-in database</b><span id="db-note">The one this app comes with.</span></div>
             <button class="btn" type="button" id="db-import">Bring in a database</button>
@@ -212,7 +212,7 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
             <button class="btn" type="button" id="db-reset">Back to the original</button>
           </div>
           <input type="file" id="db-file" accept=".zip,application/zip" hidden>
-          <p class="fine">A zip of a CM 01/02 Data folder. It only changes new games: a save keeps the database it was started with. Takes effect when you kick off.</p>
+          <p class="fine">A zip of a CM 01/02 Data folder, or a patched game (such as 3.9.68) with its .exe files. New games use it; a save keeps the database it was started with, and saves may not load across versions. Takes effect when you kick off.</p>
           <div class="status" id="db-status"></div>
         </div>
       </div>
@@ -428,11 +428,13 @@ async function renderDb() {
   const day = t => new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
   if (pend && pend.action === "set") { $("db-name").textContent = pend.name; $("db-note").textContent = pend.count + " files · goes in when you kick off"; }
   else if (pend && pend.action === "reset") { $("db-name").textContent = "Built-in database"; $("db-note").textContent = "Switches back when you kick off"; }
-  else if (act) { $("db-name").textContent = act.name; $("db-note").textContent = act.files.length + " files · brought in " + day(act.at); }
+  else if (act) { $("db-name").textContent = act.name; $("db-note").textContent = (act.version ? "Game version " + act.version + " · " : "") + act.files.length + " files · brought in " + day(act.at); }
   else { $("db-name").textContent = "Built-in database"; $("db-note").textContent = "The one this app comes with."; }
   $("db-reset-row").hidden = !((act && !(pend && pend.action === "reset")) || (pend && pend.action === "set"));
 }
 renderDb();
+// The version badge on the launcher follows whatever game program is in use.
+(function showVersion() { const act = dbActive(); if (act && act.version) { const v = document.querySelector(".rail .ver b"); if (v) v.textContent = act.version === "patched" ? "Patched" : act.version; } })();
 $("db-import").onclick = () => $("db-file").click();
 $("db-file").onchange = async e => {
   const f = e.target.files[0]; e.target.value = ""; if (!f) return;
@@ -443,12 +445,16 @@ $("db-file").onchange = async e => {
     const files = {};
     for (const [path, bytes] of Object.entries(all)) {
       if (path.endsWith("/") || /(^|\/)__MACOSX\//.test(path) || /(^|\/)\.DS_Store$/.test(path)) continue;
+      const base = path.split("/").pop();
+      // The game programs (a patched version such as 3.9.68) sit in the game folder itself.
+      if (/^cm0102(_gdi)?\.exe$/i.test(base)) { files[/gdi/i.test(base) ? "cm0102_GDI.exe" : "cm0102.exe"] = new Blob([bytes]); continue; }
+      if (/^hall_of_fame\.bin$/i.test(base) && !/(^|\/)data\//i.test(path)) { files["hall_of_fame.bin"] = new Blob([bytes]); continue; }
       const m = /(?:^|\/)data\/(.+)$/i.exec(path);
       const rel = m ? m[1] : (!path.includes("/") && /\.(dat|cfg|lng|pct|mbr|rgn|fnt|t2k)$/i.test(path) ? path : null);
-      if (rel && !rel.includes("/")) files[rel] = new Blob([bytes]);
+      if (rel && !rel.includes("/")) files["Data/" + rel] = new Blob([bytes]);
     }
     const n = Object.keys(files).length;
-    if (!n || !Object.keys(files).some(k => /\.dat$/i.test(k))) { $("db-status").textContent = "That zip doesn't look like a CM Data folder (no .dat files in a Data folder)."; return; }
+    if (!n || !Object.keys(files).some(k => /\.(dat|exe)$/i.test(k))) { $("db-status").textContent = "That zip doesn't look like CM 01/02 (no Data folder with .dat files, and no game program)."; return; }
     await dbPut("pending", { action: "set", name: f.name.replace(/\.zip$/i, ""), count: n, files });
     $("db-status").textContent = "Got " + n + " files. They go in when you kick off. Start a new game to use them.";
     renderDb();
@@ -464,15 +470,17 @@ $("db-reset").onclick = async () => {
 // Called at kick off, before Windows starts.
 async function applyDatabase() {
   const pend = await dbGet("pending"); if (!pend) return;
-  const dir = gameDir() + "/Data";
+  const g = gameDir();
+  const full = n => g + "/" + (n.includes("/") || /\.(exe|bin)$/i.test(n) ? n : "Data/" + n);
   const act = dbActive();
   // Take out whatever an earlier import put in, so the packed files show again.
-  if (act) for (const n of act.files) { try { FS.unlink(dir + "/" + n); } catch (e) {} }
+  if (act) for (const n of act.files) { try { FS.unlink(full(n)); } catch (e) {} }
   if (pend.action === "set") {
-    ensureDir(dir);
+    ensureDir(g + "/Data");
     const names = [];
-    for (const [n, blob] of Object.entries(pend.files)) { FS.writeFile(dir + "/" + n, new Uint8Array(await blob.arrayBuffer())); names.push(n); }
-    ls.set(DB_KEY, JSON.stringify({ name: pend.name, at: Date.now(), files: names }));
+    for (const [n, blob] of Object.entries(pend.files)) { FS.writeFile(full(n), new Uint8Array(await blob.arrayBuffer())); names.push(n); }
+    const gdi = pend.files["cm0102_GDI.exe"];
+    ls.set(DB_KEY, JSON.stringify({ name: pend.name, at: Date.now(), files: names, version: gdi ? (gdi.size === 7188480 ? "3.9.68" : "patched") : "" }));
     saveLog("database: brought in " + pend.name + " (" + names.length + " files)");
     dbNow = pend.name;
   } else {
