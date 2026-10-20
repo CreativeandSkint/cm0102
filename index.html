@@ -201,6 +201,20 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
           <div class="status" id="l-status"></div>
           <div class="saves" id="pending"></div>
         </div>
+        <div class="section">
+          <h2>Database <span style="opacity:.6">(test)</span></h2>
+          <div class="row">
+            <div class="label"><b id="db-name">Built-in database</b><span id="db-note">The one this app comes with.</span></div>
+            <button class="btn" type="button" id="db-import">Bring in a database</button>
+          </div>
+          <div class="row" id="db-reset-row" hidden>
+            <div class="label"><span>Go back to the database the app came with.</span></div>
+            <button class="btn" type="button" id="db-reset">Back to the original</button>
+          </div>
+          <input type="file" id="db-file" accept=".zip,application/zip" hidden>
+          <p class="fine">A zip of a CM 01/02 Data folder. It only changes new games: a save keeps the database it was started with. Takes effect when you kick off.</p>
+          <div class="status" id="db-status"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -397,6 +411,79 @@ $("l-file").onchange = async e => {
     renderPending();
   } catch (err) { $("l-status").textContent = "Couldn't add that file: " + (err.message || err); }
 };
+
+/* ===== Custom database (test) =====
+   A database update is a set of files for the game's Data folder. The game's own
+   Data files live inside the packed game; a real file at the same path takes
+   priority, so an imported database is written over them at kick off, and
+   removed again to go back. The choice waits in IndexedDB until then. */
+const DB_KEY = "cm-db-active";   // { name, at, files: [relative names] } once applied
+let dbStoreP = null;
+function dbStore() { return dbStoreP || (dbStoreP = new Promise(res => { try { const r = indexedDB.open("cm0102-database", 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => res(null); } catch (e) { res(null); } })); }
+async function dbGet(k) { const db = await dbStore(); if (!db) return null; return new Promise(res => { const q = db.transaction("kv").objectStore("kv").get(k); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); }
+async function dbPut(k, v) { const db = await dbStore(); if (!db) throw new Error("This browser won't store files"); return new Promise((res, rej) => { const tx = db.transaction("kv", "readwrite"); v === null ? tx.objectStore("kv").delete(k) : tx.objectStore("kv").put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+function dbActive() { try { return JSON.parse(ls.get(DB_KEY, "null")); } catch (e) { return null; } }
+async function renderDb() {
+  const act = dbActive(), pend = await dbGet("pending");
+  const day = t => new Date(t).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  if (pend && pend.action === "set") { $("db-name").textContent = pend.name; $("db-note").textContent = pend.count + " files · goes in when you kick off"; }
+  else if (pend && pend.action === "reset") { $("db-name").textContent = "Built-in database"; $("db-note").textContent = "Switches back when you kick off"; }
+  else if (act) { $("db-name").textContent = act.name; $("db-note").textContent = act.files.length + " files · brought in " + day(act.at); }
+  else { $("db-name").textContent = "Built-in database"; $("db-note").textContent = "The one this app comes with."; }
+  $("db-reset-row").hidden = !((act && !(pend && pend.action === "reset")) || (pend && pend.action === "set"));
+}
+renderDb();
+$("db-import").onclick = () => $("db-file").click();
+$("db-file").onchange = async e => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  $("db-status").textContent = "Reading…";
+  try {
+    const z = await fflate(); const buf = new Uint8Array(await f.arrayBuffer());
+    const all = await new Promise((res, rej) => z.unzip(buf, (err, o) => err ? rej(err) : res(o)));
+    const files = {};
+    for (const [path, bytes] of Object.entries(all)) {
+      if (path.endsWith("/") || /(^|\/)__MACOSX\//.test(path) || /(^|\/)\.DS_Store$/.test(path)) continue;
+      const m = /(?:^|\/)data\/(.+)$/i.exec(path);
+      const rel = m ? m[1] : (!path.includes("/") && /\.(dat|cfg|lng|pct|mbr|rgn|fnt|t2k)$/i.test(path) ? path : null);
+      if (rel && !rel.includes("/")) files[rel] = new Blob([bytes]);
+    }
+    const n = Object.keys(files).length;
+    if (!n || !Object.keys(files).some(k => /\.dat$/i.test(k))) { $("db-status").textContent = "That zip doesn't look like a CM Data folder (no .dat files in a Data folder)."; return; }
+    await dbPut("pending", { action: "set", name: f.name.replace(/\.zip$/i, ""), count: n, files });
+    $("db-status").textContent = "Got " + n + " files. They go in when you kick off. Start a new game to use them.";
+    renderDb();
+  } catch (err) { $("db-status").textContent = "Couldn't read that zip: " + (err.message || err); }
+};
+$("db-reset").onclick = async () => {
+  const pend = await dbGet("pending");
+  if (pend && pend.action === "set" && !dbActive()) await dbPut("pending", null);
+  else await dbPut("pending", { action: "reset" });
+  $("db-status").textContent = "The original database comes back when you kick off.";
+  renderDb();
+};
+// Called at kick off, before Windows starts.
+async function applyDatabase() {
+  const pend = await dbGet("pending"); if (!pend) return;
+  const dir = gameDir() + "/Data";
+  const act = dbActive();
+  // Take out whatever an earlier import put in, so the packed files show again.
+  if (act) for (const n of act.files) { try { FS.unlink(dir + "/" + n); } catch (e) {} }
+  if (pend.action === "set") {
+    ensureDir(dir);
+    const names = [];
+    for (const [n, blob] of Object.entries(pend.files)) { FS.writeFile(dir + "/" + n, new Uint8Array(await blob.arrayBuffer())); names.push(n); }
+    ls.set(DB_KEY, JSON.stringify({ name: pend.name, at: Date.now(), files: names }));
+    saveLog("database: brought in " + pend.name + " (" + names.length + " files)");
+    dbNow = pend.name;
+  } else {
+    try { localStorage.removeItem(DB_KEY); } catch (e) {}
+    saveLog("database: back to the built-in one");
+    dbNow = "the original";
+  }
+  await syncNow("database");
+  await dbPut("pending", null);
+}
+let dbNow = "";
 
 /* ===== Launcher status ===== */
 const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
@@ -667,7 +754,7 @@ function startEngine() {
       for (const k of Object.keys(ready)) delete ready[k];
       diag.phase = "starting Windows"; diagSample();
       setInterval(diagSample, 3000);
-      rescueMixedSaves().then(r => { rescuedNow = r; }).finally(() => recoverFromSafetyCopies().then(r => { recoveredNow = r; }).finally(() => installPendingSaves().finally(() => origStart())));
+      rescueMixedSaves().then(r => { rescuedNow = r; }).finally(() => recoverFromSafetyCopies().then(r => { recoveredNow = r; }).finally(() => installPendingSaves().finally(() => applyDatabase().catch(e => saveLog("database failed: " + e)).finally(() => origStart()))));
     };
     installJitWatch();
     Module.cmJitOnFlush = () => { jitMem.sinceFlush = 0; jitMem.flushes++; diag.flushes = jitMem.flushes; };
@@ -688,6 +775,7 @@ function onWindowShown() {
   setTimeout(() => { $("boot").hidden = true; clearInterval(bootTimer); }, 6000);
   $("tools").hidden = false;
   if (installedNow) setTimeout(() => toast(installedNow + " is ready under Restore Saved Game", 4500), 7000);
+  if (dbNow) setTimeout(() => toast("Now using " + dbNow + " database for new games", 5000), 4000);
   if (installedTactics) setTimeout(() => toast("New tactics ready under Tactics, Load: " + installedTactics, 5000), installedNow ? 12500 : 7000);
   if (rescuedNow.length) setTimeout(() => toast("Found and restored your lost " + rescuedNow.join(" and ") + " save", 6000), 9000);
   if (recoveredNow.length) setTimeout(() => toast("Restored your latest " + recoveredNow.join(" and ") + " save", 5000), 12000);
