@@ -1,7 +1,7 @@
 // Keeps every file of the game on the device so it opens and plays offline.
 // App files live in a versioned cache; the 140 MB of game data lives in its own
 // cache so app updates never re-download it.
-const APP_CACHE = "cm0102-app-v28";
+const APP_CACHE = "cm0102-app-v29";
 const DATA_CACHE = "cm0102-data-v1";
 const APP_FILES = [
   "./", "index.html", "shell.js", "manifest.webmanifest",

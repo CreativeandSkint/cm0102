@@ -65,6 +65,12 @@ button { font: inherit; color: inherit; }
 .rail .legal h3.sub { margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--navy-2); }
 .rail .coffee { display: block; text-align: center; text-decoration: none; font-family: var(--display); font-weight: 600; font-size: 14px; letter-spacing: .02em; color: var(--yellow); border: 1px solid rgba(255,211,26,.5); padding: 7px 4px; }
 .rail .coffee:hover { background: rgba(255,211,26,.1); }
+.rail .howto { background: none; cursor: pointer; width: 100%; margin-top: 6px; color: #dfe3ff; border-color: var(--navy-2); }
+#howto { position: fixed; inset: 0; z-index: 20; background: rgba(0,0,0,.6); display: grid; place-items: center; padding: 16px; }
+#howto .box { width: min(420px, 100%); background: #070a3d; border: 2px solid var(--navy-2); padding: 18px 20px; display: grid; gap: 12px; }
+#howto h2 { margin: 0; font-family: var(--display); font-weight: 600; font-size: 22px; color: var(--yellow); }
+#howto p { margin: 0; font-size: 15px; line-height: 1.5; color: #c8cbe8; }
+#howto .btn { justify-self: end; }
 .main { min-width: 0; display: flex; flex-direction: column; }
 .titlebar { background: var(--red); margin: 10px; padding: 10px 16px 8px; border: 1px solid #ff6a6a; box-shadow: inset 0 -3px 0 rgba(0,0,0,.25); }
 .titlebar h1 { margin: 0; font-family: var(--display); font-weight: 700; font-size: clamp(26px, 4.4vw, 40px); letter-spacing: .01em; line-height: 1; text-wrap: balance; color: #fff; text-shadow: 0 2px 0 rgba(0,0,0,.35); }
@@ -146,10 +152,8 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
         <p>It has no ads, never will, and it will always be free.</p>
         <a class="coffee" href="https://www.creativeandskint.com/buymeacoffee" target="_blank" rel="noopener">☕ Buy me a coffee</a>
         <p class="tiny">Totally optional, just a cheers. It helps me fix bugs, add new features and keep the app running.</p>
-        <h3 class="sub">How to save</h3>
-        <p>Save in the game as normal, then give it a few seconds. A yellow box with a tick pops up at the bottom once the save is stored on this iPad.</p>
-        <p>Don't close the app until you've seen it. Not sure? Tap Check on the side panel.</p>
-        <p class="tiny copy">© 2026 Creative and Skint Ltd. The app's own code and design. The emulator is Boxedwine (GPL v2), source available on request. The game belongs to its makers and publishers.</p>
+        <button type="button" class="coffee howto" id="howto-open">How to save</button>
+        <p class="tiny copy">© 2026 Creative and Skint Ltd. The app's own code and design. The emulator is Boxedwine (GPL v2). The game belongs to its makers and publishers.</p>
       </div>
     </aside>
     <div class="main">
@@ -227,6 +231,15 @@ canvas.boxedwine-webgl-canvas { pointer-events: none; z-index: 1; }
         </div>
       </div>
     </div>
+  </div>
+</div>
+
+<div id="howto" hidden role="dialog" aria-modal="true" aria-labelledby="howto-title">
+  <div class="box">
+    <h2 id="howto-title">How to save</h2>
+    <p>Save in the game as normal, then give it a few seconds. A yellow box with a tick pops up at the bottom once the save is stored on this iPad.</p>
+    <p>Don't close the app until you've seen it. Not sure? Tap Check on the side panel.</p>
+    <button class="btn" type="button" id="howto-close">Got it</button>
   </div>
 </div>
 
@@ -529,6 +542,10 @@ async function applyDatabase() {
   await syncNow("database");
 }
 let dbNow = "";
+
+$("howto-open").onclick = () => { $("howto").hidden = false; };
+$("howto-close").onclick = () => { $("howto").hidden = true; };
+$("howto").addEventListener("click", e => { if (e.target.id === "howto") $("howto").hidden = true; });
 
 /* ===== Launcher status ===== */
 const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
